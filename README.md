@@ -2,22 +2,20 @@
 
 Open source tools for creating with your X (Twitter) community. Each tool lives in its own folder with its own README, setup and checks. More tools will be added as independent sibling projects.
 
-**Made by [Matti Vilola](https://github.com/mattivilola) with {love}.**
-
-**Sponsored and distributed by [ILO Applications SL](https://iloapps.com).**
+**Made by [Matti Vilola](https://github.com/mattivilola) with ❤️, sponsored and distributed by [ILO Applications SL](https://iloapps.com).**
 
 ## Tools
 
 | Tool | Purpose | Status |
 | --- | --- | --- |
-| [Followers Hero](./followers-hero-image/) | Turn community avatars into customizable celebration posters. Includes an offline editor and a supervised website collector restricted to written-authorized use. | Experimental v0.1.0 |
+| [Followers Hero](./followers-hero-image/) | Turn community avatars into customizable celebration posters. Includes an offline editor and a supervised website collector with explicit risk acknowledgement. | Experimental v0.1.0 |
 | [Followers Manager](./followers-manager/) | Track follower history, review relationships and run a continuously supervised unfollow selection with a live overlay. Written-authorized website use only. | Experimental v0.1.0 |
 | [API Followers Management](./api-followers-management/) | Separate proposed API edition for follower tracking and permitted account management. | Feasibility research |
 | API Followers Hero Image | A separate future tool using the official X API, subject to access, terms and export-rights review. | [Exploration plan](./docs/api-followers-hero-image-plan.md) |
 
 ### Followers Hero
 
-Create a poster with three compositions, four palettes, multiple aspect ratios, a custom message and PNG/JPEG export. Try the illustrated demo, import your own photos or JSON, or use the supervised collection workflow when you have X’s written authorization.
+Create a poster with three compositions, four palettes, multiple aspect ratios, a custom message and PNG/JPEG export. Try the illustrated demo, import your own photos or JSON, or use the supervised collection workflow after acknowledging X’s restrictions, the account risk and your responsibility.
 
 **[Installation, supervision process and full tool documentation](./followers-hero-image/README.md)**
 
@@ -25,9 +23,9 @@ Create a poster with three compositions, four palettes, multiple aspect ratios, 
 
 ## X rules apply to every tool
 
-Read [X access and usage decisions](./docs/x-platform-policy.md) before adding or using an integration. X prohibits non-API website automation and restricts scraping. A visible overlay, manual Start/Pause/Stop controls, slow scrolling or accepting responsibility does not override those restrictions. The website collector is restricted to users with X’s express written authorization; there is no guarantee against account restrictions.
+Read [X access and usage decisions](./docs/x-platform-policy.md) before adding or using an integration. X prohibits non-API website automation and restricts scraping. A visible overlay, manual Start/Pause/Stop controls, slow scrolling or accepting responsibility does not override those restrictions. Followers Hero requires an explicit operator acknowledgement of those restrictions, account risk and continuous supervision. That acknowledgement does not grant or claim X permission, and there is no guarantee against account restrictions.
 
-No live collection on the maintainer’s X account was used to validate this release. Tests use controlled local fixtures.
+Automated regression tests use controlled local fixtures. Any separately requested live check is limited and supervised by the account owner; it does not establish permission under X’s rules.
 
 ## Repository layout
 

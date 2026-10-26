@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-test('supervised collection lifecycle enforces authorization and protects progress', async (t) => {
-  const state = {}, listeners = {}, tabs = new Map(); let tabId = 0, permission = true;
+test('supervised collection lifecycle enforces risk acknowledgement and protects progress', async (t) => {
+  const state = {}, listeners = {}, tabs = new Map(), activated = []; let tabId = 0, permission = true;
   const event = (name) => ({ addListener: (fn) => { listeners[name] = fn; } });
   const id = 'followers-hero-test', base = `chrome-extension://${id}/`;
+  tabs.set(9000, { id: 9000, url: base + 'app.html', windowId: 1, active: false });
   globalThis.chrome = {
     runtime: { id, getURL: (path) => base + path, onStartup: event('startup'), onMessage: event('message') },
     permissions: { contains: async () => permission },
@@ -16,20 +17,23 @@ test('supervised collection lifecycle enforces authorization and protects progre
     } },
     action: { onClicked: event('action') }, scripting: { executeScript: async () => {} },
     tabs: { onUpdated: event('updated'), onRemoved: event('removed'),
-      create: async ({ url }) => { const tab = { id: ++tabId, url, status: 'loading' }; tabs.set(tab.id, tab); return tab; },
+      create: async ({ url, active = false }) => { const tab = { id: ++tabId, url, active, status: 'loading' }; tabs.set(tab.id, tab); return tab; },
       get: async (key) => tabs.get(key), sendMessage: async () => ({ ok: true }),
+      query: async ({ url }) => [...tabs.values()].filter((tab) => tab.url === url),
+      update: async (key, data) => { activated.push(key); Object.assign(tabs.get(key), data); return tabs.get(key); },
     },
+    windows: { update: async () => {} },
   };
   await import(`../src/background.js?test=${Date.now()}`);
   const editor = { id, url: base + 'app.html' };
   const send = (message, sender = editor) => new Promise((resolve) => listeners.message(message, sender, resolve));
-  const start = (extra = {}) => send({ type: 'FH_START', username: 'alex', target: 2, authorization: 'written-permission', ...extra });
+  const start = (extra = {}) => send({ type: 'FH_START', username: 'alex', target: 2, editorTabId: 9000, acknowledgement: 'supervised-risk', ...extra });
   let collector;
   const batch = (extra = {}) => ({ type: 'FH_BATCH', id: state.job.id, followers: [{ username: 'one' }], ...extra });
   const control = (action) => send({ type: 'FH_CONTROL', id: state.job.id, action }, collector);
-  await t.test('refuses content-script commands, absent authorization and missing site permission', async () => {
+  await t.test('refuses content-script commands, absent acknowledgement and missing site permission', async () => {
     assert.equal((await send({ type: 'FH_START', username: 'alex' }, { id, url: 'https://x.com/alex' })).ok, false);
-    assert.equal((await start({ authorization: undefined })).ok, false);
+    assert.equal((await start({ acknowledgement: undefined })).ok, false);
     permission = false; assert.equal((await start()).ok, false); permission = true;
     assert.equal(state.job, undefined);
   });
@@ -59,7 +63,15 @@ test('supervised collection lifecycle enforces authorization and protects progre
     assert.equal((await send(batch({ followers: [{ username: 'ONE' }, { username: 'two' }, { username: 'three' }] }), collector)).stop, true);
     assert.deepEqual(state.job.followers.map((f) => f.username), ['one', 'two']);
     assert.equal(state.job.status, 'complete');
+    assert.equal(activated.at(-1), 9000);
     assert.equal((await control('start')).ok, false);
+  });
+  await t.test('opens a replacement results tab if the original editor was closed', async () => {
+    tabs.delete(9000);
+    await start({ target: 1 }); collector.tab.id = state.job.tabId;
+    await control('start'); await send(batch(), collector);
+    assert.equal(state.job.status, 'complete');
+    assert.equal([...tabs.values()].some((tab) => tab.url === base + 'app.html' && tab.active), true);
   });
   await t.test('Stop is terminal for on-page controls and startup pauses active work', async () => {
     await start({ target: 10 }); collector.tab.id = state.job.tabId;

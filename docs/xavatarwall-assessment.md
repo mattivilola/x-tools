@@ -15,7 +15,7 @@ No license file was present in the inspected tree and GitHub's repository metada
 ## Followers Hero's initial direction
 
 - A full-tab editor with a live, high-resolution preview and deliberate English-language UI.
-- Offline photo/JSON editing plus a supervised rendered-card collector, restricted to operators with X's written authorization. No network hooks, token extraction or internal API calls.
+- Offline photo/JSON editing plus a supervised rendered-card collector, requiring explicit operator risk acknowledgement and continuous supervision. No network hooks, token extraction or internal API calls.
 - Scope collection messages to the selected tab, expected account route and collection ID.
 - Save progress locally, pause on stalls, and describe partial lists accurately.
 - Offer three compositions, four palettes, multiple aspect ratios, PNG/JPEG and portable JSON.

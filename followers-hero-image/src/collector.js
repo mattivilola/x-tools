@@ -7,6 +7,7 @@
   function render(status, message) {
     if (!view) return;
     view.querySelector('#state').textContent = status;
+    view.querySelector('section').dataset.state = status;
     view.querySelector('#activity').textContent = message;
     view.querySelector('#count').textContent = `${job.followers.length} / ${job.target} people saved`;
     view.querySelector('progress').max = job.target;
@@ -14,12 +15,14 @@
     view.querySelector('#start').disabled = Boolean(active) || ['complete', 'stopped'].includes(status);
     view.querySelector('#pause').disabled = !active;
     view.querySelector('#stop').disabled = ['complete', 'stopped'].includes(status);
+    view.querySelector('#results').hidden = !job.followers.length;
   }
   function monitored() {
     return !document.hidden && document.hasFocus() && host?.isConnected && getComputedStyle(host).display !== 'none' && host.getBoundingClientRect().width > 0;
   }
   async function pause(reason) {
     active = null;
+    if (['complete', 'stopped'].includes(job?.status)) return;
     render('paused', reason);
     await send({ type: 'FH_CONTROL', action: 'pause' }).catch(() => {});
   }
@@ -50,7 +53,7 @@
         if (active !== token) break;
         if (!response?.ok) { await pause('Paused: the extension rejected this batch. Reopen the editor.'); break; }
         job.followers.length = response.count;
-        if (response.stop) { active = null; render('complete', 'Target reached. Collection stopped; open the editor to create your image.'); break; }
+        if (response.stop) { active = null; render('complete', 'Target reached. Returning to your poster and collected avatars…'); break; }
       } else idle++;
       if (idle >= 10) { active = null; await send({ type: 'FH_END' }); render('paused', 'No new people for 30 seconds. Check for loading errors or restrictions before resuming.'); break; }
       render('collecting', 'Waiting 3 seconds, then scrolling once. Watch for errors or restrictions and stop if anything looks wrong.');
@@ -62,11 +65,16 @@
   }
   function mount() {
     host = document.createElement('followers-hero-monitor');
-    host.style.cssText = 'all:initial!important;position:fixed!important;right:20px!important;bottom:20px!important;width:min(440px,calc(100vw - 40px))!important;z-index:2147483647!important;display:block!important;';
+    host.style.cssText = 'all:initial!important;font:400 14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;color:#26302f!important;position:fixed!important;right:20px!important;bottom:20px!important;width:min(440px,calc(100vw - 40px))!important;z-index:2147483647!important;display:block!important;';
     view = host.attachShadow({ mode: 'open' });
-    view.innerHTML = `<style>:host{font-family:system-ui,sans-serif;color:#26302f}section{background:white;border:3px solid #6e5a9c;border-radius:16px;padding:22px;box-shadow:0 8px 48px #0005}h2{font-size:20px;margin:0 0 12px}p{font-size:13px;line-height:1.5;margin:10px 0}strong{font-size:15px}progress{width:100%;height:16px;accent-color:#6e5a9c}.buttons{display:flex;gap:8px;margin:16px 0}button{font:600 14px system-ui;padding:12px;flex:1;border:1px solid #68528e;border-radius:7px;background:#fff;color:#362653;cursor:pointer}#start{background:#59457e;color:#fff}#stop{border-color:#a33;color:#a33}button:disabled{opacity:.5;cursor:default}.warning{background:#fff2d6;color:#624712;padding:10px;border-radius:6px}#activity{min-height:40px}small{font-size:11px;line-height:1.4;display:block}</style><section role="region" aria-label="Followers Hero collection monitor"><h2>Followers Hero · stay and monitor</h2><strong id="state">waiting</strong><p id="account"></p><p id="count"></p><progress aria-label="Collection progress"></progress><p id="activity" role="status" aria-live="polite"></p><div class="buttons"><button id="start">Start / Resume</button><button id="pause">Pause</button><button id="stop">Stop</button></div><p class="warning">Keep watching this tab continuously. Pause or stop at any time. Switching tabs or windows pauses collection.</p><small>Supervision does not make scraping permitted. Website collection requires X’s written authorization. Stop on any warning, challenge or restriction. No guarantee against account enforcement.</small></section>`;
+    view.innerHTML = `<style>
+      :host{color:#26302f}*{box-sizing:border-box}section{font:400 14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;border:1px solid #c7bfdb;border-radius:18px;padding:24px;box-shadow:0 12px 48px #18221c30}h2{font:700 18px/1.3 system-ui,sans-serif;letter-spacing:-.4px;margin:0 0 14px}p{font-size:13px;line-height:1.6;margin:12px 0}#state{display:inline-block;font-size:12px;font-weight:650;background:#f0edf6;color:#574476;padding:4px 10px;border-radius:20px;text-transform:capitalize}section[data-state="complete"] #state{background:#e5f4e9;color:#24643d}#account{color:#65706a;font-size:12px}#count{font-size:25px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.7px;line-height:1.25;margin:14px 0}progress{display:block;width:100%;height:9px;accent-color:#6e5a9c}.buttons{display:flex;gap:8px;margin:16px 0}button{font:600 13px/1.4 system-ui,sans-serif;padding:12px 10px;flex:1;border:1px solid #c8bfda;border-radius:9px;background:#fff;color:#483563;cursor:pointer}button:focus-visible{outline:3px solid #9882bf;outline-offset:2px}#start{background:#59457e;border-color:#59457e;color:#fff}#stop{border-color:#e6bfbb;color:#9a4740}button:disabled{opacity:.45;cursor:default}#results{width:100%;background:#f2eef9}#results[hidden]{display:none}.warning{background:#fff6e3;color:#715322;padding:12px;border-radius:9px;font-size:12px}#activity{min-height:42px;color:#54615a}small{font-size:11px;line-height:1.6;display:block;color:#69736d}
+    </style><section role="region" aria-label="Followers Hero collection monitor"><h2>Followers Hero</h2><strong id="state">waiting</strong><p id="account"></p><p id="count"></p><progress aria-label="Collection progress"></progress><p id="activity" role="status" aria-live="polite"></p><button id="results" hidden>View results</button><div class="buttons"><button id="start">Start / Resume</button><button id="pause">Pause</button><button id="stop">Stop</button></div><p class="warning">Stay here and monitor continuously. Switching tabs or windows pauses collection. Pause or stop at any time.</p><small>X restricts website automation and scraping. You are responsible for proceeding. Stop on any warning, challenge or restriction. Monitoring does not grant permission or prevent account enforcement.</small></section>`;
     view.querySelector('#account').textContent = `Account: @${job.username}. Only visible follower cards are read.`;
     document.documentElement.append(host);
+    view.querySelector('#results').addEventListener('click', async (event) => {
+      if (event.isTrusted) { active = null; await send({ type: 'FH_OPEN_EDITOR' }); }
+    });
     view.querySelector('#start').addEventListener('click', async (event) => {
       if (!event.isTrusted || active || !monitored()) return;
       const token = {}; active = token;

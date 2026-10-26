@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Followers Hero",
   "version": "0.1.0",
-  "description": "Turn your X community into a poster. Made by Matti Vilola with {love}, sponsored and distributed by ILO Applications SL.",
+  "description": "Turn your X community into a poster.\nMade by Matti Vilola with ❤️, sponsored and distributed by ILO Applications SL.",
   "permissions": ["storage", "scripting"],
   "optional_host_permissions": ["https://x.com/*", "https://pbs.twimg.com/*"],
   "background": { "service_worker": "src/background.js", "type": "module" },

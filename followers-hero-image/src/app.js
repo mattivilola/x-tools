@@ -58,7 +58,7 @@ async function draw() {
   $('dimensions').textContent = `${$('poster').width} × ${$('poster').height}`;
   const urls = [...new Set(list.map((person) => person.avatar).filter(Boolean))];
   let cursor = 0;
-  const remote = currentSource === 'collected' && job?.authorization === 'written-permission';
+  const remote = currentSource === 'collected' && job?.acknowledgement === 'supervised-risk';
   await Promise.all(Array.from({ length: Math.min(6, urls.length) }, async () => {
     while (cursor < urls.length && version === generation) await loadImage(urls[cursor++], remote);
   }));
@@ -86,14 +86,15 @@ for (const key of keys) $(key)?.addEventListener('input', async () => {
 $('demo').addEventListener('click', () => choose('demo').catch((error) => notify(error.message)));
 async function startCollection(resume = false) {
   if (!extension) throw new Error('Load this folder as an unpacked extension to use supervised collection.');
-  if (!$('authorization').checked) throw new Error('Confirm your written authorization from X and continuous supervision before using website collection.');
+  if (!$('risk-acknowledgement').checked) throw new Error('Acknowledge the X policy and account risk, your responsibility, and continuous supervision before collection.');
   const handle = resume ? job.username : $('username').value.trim().replace(/^@/, '');
   if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) throw new Error('Enter a valid X username.');
   if (!resume && job?.followers?.length && !confirm('Replace the current collection? Export JSON first if you want to keep it.')) return;
   const granted = await chrome.permissions.request({ origins: ['https://x.com/*', 'https://pbs.twimg.com/*'] });
   if (!granted) throw new Error('Site permission was declined. You can still use local photos and JSON.');
-  await send({ type: 'FH_START', username: handle, target: resume ? job.target : $('target').value, resume, authorization: 'written-permission' });
-  config.username = handle; $('authorization').checked = false;
+  const editorTab = await chrome.tabs.getCurrent();
+  await send({ type: 'FH_START', username: handle, target: resume ? job.target : $('target').value, resume, editorTabId: editorTab?.id, acknowledgement: 'supervised-risk' });
+  config.username = handle; $('risk-acknowledgement').checked = false;
   syncControls(); await store({ settings: config }); await choose('collected');
 }
 $('collect-form').addEventListener('submit', async (event) => { event.preventDefault(); try { await startCollection(); } catch (error) { notify(error.message); } });

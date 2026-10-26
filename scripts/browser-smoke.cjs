@@ -39,10 +39,11 @@ const pass = (name) => { checks++; console.log(`PASS ${name}`); };
     let requests = 0;
     const cards = (start, count) => Array.from({ length: count }, (_, offset) => {
       const i = start + offset;
-      return `<div data-testid="UserCell"><a href="/person${i}"><img width="24" height="24" src="https://pbs.twimg.com/profile_images/fixture/avatar.png"></a><span dir="ltr">Person ${i}</span></div>`;
+      return `<div data-testid="UserCell" style="min-height:140px"><a href="/person${i}"><img width="24" height="24" src="https://pbs.twimg.com/profile_images/fixture/avatar.png"></a><span dir="ltr">Person ${i}</span></div>`;
     }).join('');
     await context.route('https://x.com/**', (route) => { requests++; return route.fulfill({ contentType: 'text/html', body: `<!doctype html><title>X local fixture</title>${cards(0, 10)}` }); });
-    await context.route('https://pbs.twimg.com/**', (route) => { requests++; return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64') }); });
+    const avatarFixture = fs.readFileSync(join(root, 'followers-hero-image', 'assets', 'icon-48.png'));
+    await context.route('https://pbs.twimg.com/**', (route) => { requests++; return route.fulfill({ contentType: 'image/png', body: avatarFixture }); });
     await editor.goto(`chrome-extension://${id}/app.html`);
     await editor.waitForFunction(() => !document.getElementById('png').disabled);
     assert.equal(requests, 0); pass('offline demo makes no X requests');
@@ -67,8 +68,8 @@ const pass = (name) => { checks++; console.log(`PASS ${name}`); };
     pass('PNG and JPEG exports contain real image data');
     await editor.locator('summary').click(); await editor.locator('#username').fill('fixture');
     await editor.locator('#collect').click();
-    assert.match(await editor.locator('#status').textContent(), /written authorization/);
-    pass('website collection refuses missing authorization attestation');
+    assert.match(await editor.locator('#status').textContent(), /Acknowledge the X policy and account risk/);
+    pass('website collection refuses missing risk acknowledgement');
     // Bind a controlled fixture tab to a job; start authorization and permission
     // decisions are covered separately by background.test.js. All collector and
     // overlay code, messaging and storage below run in the actual extension.
@@ -76,11 +77,16 @@ const pass = (name) => { checks++; console.log(`PASS ${name}`); };
     await collector.goto('https://x.com/fixture/followers');
     await worker.evaluate(async () => {
       const [tab] = await chrome.tabs.query({ url: 'https://x.com/fixture/followers' });
-      await chrome.storage.local.set({ source: 'collected', job: { id: 'local-fixture', tabId: tab.id, username: 'fixture', target: 144, followers: [], authorization: 'written-permission', status: 'waiting', message: 'Local test fixture' } });
+      const [editorTab] = await chrome.tabs.query({ url: chrome.runtime.getURL('app.html') });
+      await chrome.storage.local.set({ source: 'collected', job: { id: 'local-fixture', tabId: tab.id, editorTabId: editorTab.id, username: 'fixture', target: 144, followers: [], acknowledgement: 'supervised-risk', status: 'waiting', message: 'Local test fixture' } });
     });
+    await editor.reload();
     await collector.reload(); await collector.bringToFront();
     const overlay = collector.locator('followers-hero-monitor');
     await overlay.getByRole('button', { name: 'Start / Resume' }).waitFor();
+    assert.match(await overlay.evaluate((host) => getComputedStyle(host.shadowRoot.querySelector('section')).fontFamily), /system-ui/);
+    await collector.screenshot({ path: join(output, 'followers-hero-overlay.png') });
+    pass('overlay uses modern system typography');
     assert.equal(await worker.evaluate(async () => (await chrome.storage.local.get('job')).job.followers.length), 0);
     pass('large overlay waits for an explicit Start before reading any cards');
     await overlay.getByRole('button', { name: 'Start / Resume' }).click();
@@ -107,9 +113,18 @@ const pass = (name) => { checks++; console.log(`PASS ${name}`); };
     await overlay.getByRole('button', { name: 'Start / Resume' }).click(); await waitJob('collecting', 10);
     await overlay.getByRole('button', { name: 'Pause', exact: true }).click(); await waitJob('paused', 10);
     pass('operator Pause stops collection and preserves partial progress');
-    await collector.locator('body').evaluate((body, html) => body.insertAdjacentHTML('beforeend', html), cards(10, 150));
+    await collector.evaluate((html) => {
+      window.addEventListener('scroll', () => { document.body.insertAdjacentHTML('beforeend', html); }, { once: true });
+    }, cards(10, 150));
     await overlay.getByRole('button', { name: 'Start / Resume' }).click(); await waitJob('complete', 144);
-    pass('explicit Resume deduplicates and stops at the exact target');
+    assert.equal(await collector.evaluate(() => scrollY > 0), true);
+    pass('collector scrolls to load more people, deduplicates and stops at the exact target');
+    assert.equal(await worker.evaluate(async () => { const { job } = await chrome.storage.local.get('job'); return (await chrome.tabs.get(job.editorTabId)).active; }), true);
+    await editor.waitForFunction(() => document.getElementById('count').textContent === '144 collected people');
+    pass('completion automatically returns to the original editor with the results');
+    await editor.waitForFunction(() => !document.getElementById('png').disabled);
+    assert.equal(await editor.locator('#render-status').textContent(), 'Ready to save. Full resolution, no watermark.');
+    pass('collected avatar images load into the poster without initials fallbacks');
     await worker.evaluate(async () => {
       const { job } = await chrome.storage.local.get('job');
       await chrome.storage.local.set({ job: { ...job, id: 'local-stop-fixture', status: 'waiting', target: 200 } });

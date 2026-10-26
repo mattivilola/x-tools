@@ -5,6 +5,21 @@ const getJob = async () => (await chrome.storage.local.get('job')).job;
 const save = (job) => chrome.storage.local.set({ job: { ...job, updatedAt: Date.now() } });
 const isEditor = (sender) => sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL('app.html');
 chrome.action.onClicked.addListener(() => chrome.tabs.create({ url: chrome.runtime.getURL('app.html') }));
+async function showResults(job) {
+  const url = chrome.runtime.getURL('app.html');
+  let tab;
+  if (Number.isInteger(job.editorTabId)) {
+    const candidate = await chrome.tabs.get(job.editorTabId).catch(() => null);
+    if (candidate?.url === url) tab = candidate;
+  }
+  if (!tab) tab = (await chrome.tabs.query({ url }))[0];
+  if (tab) {
+    await chrome.tabs.update(tab.id, { active: true });
+    if (Number.isInteger(tab.windowId)) await chrome.windows.update(tab.windowId, { focused: true });
+  } else {
+    await chrome.tabs.create({ url, active: true });
+  }
+}
 async function attach(tabId) {
   const job = await getJob();
   if (!job || job.tabId !== tabId || !['waiting', 'collecting', 'paused'].includes(job.status)) return;
@@ -34,20 +49,27 @@ chrome.runtime.onStartup.addListener(() => serialize(async () => {
 }));
 async function handle(message, sender) {
   const job = await getJob();
-  if (['FH_BATCH', 'FH_END', 'FH_CONTROL'].includes(message.type)) {
-    if (sender.id !== chrome.runtime.id || sender.tab?.id !== job?.tabId || !collectionPage(sender.url, job.username) || message.id !== job.id || job.authorization !== 'written-permission') return { ok: false };
+  if (['FH_BATCH', 'FH_END', 'FH_CONTROL', 'FH_OPEN_EDITOR'].includes(message.type)) {
+    if (sender.id !== chrome.runtime.id || sender.tab?.id !== job?.tabId || !collectionPage(sender.url, job.username) || message.id !== job.id || job.acknowledgement !== 'supervised-risk') return { ok: false };
+    if (message.type === 'FH_OPEN_EDITOR') {
+      if (job.status === 'collecting') await save({ ...job, status: 'paused', message: 'Paused to view your collected avatars.' });
+      await showResults(job); return { ok: true };
+    }
     if (message.type === 'FH_CONTROL') {
       if (['complete', 'stopped'].includes(job.status)) return { ok: false };
       const status = { start: 'collecting', pause: 'paused', stop: 'stopped' }[message.action];
       if (!status) return { ok: false };
       await save({ ...job, status, message: status === 'collecting' ? 'Supervised collection active. Keep watching the overlay.' : status === 'stopped' ? 'Stopped. Your partial collection is saved.' : 'Paused. Return to the followers tab and explicitly resume.' });
+      if (status === 'stopped') await showResults(job).catch(() => {});
       return { ok: true, job: await getJob() };
     }
     if (job.status !== 'collecting') return { ok: false };
     if (message.type === 'FH_BATCH') {
       const followers = normalizeFollowers([...job.followers, ...normalizeFollowers(message.followers)]).slice(0, job.target);
       const done = followers.length >= job.target;
-      await save({ ...job, followers, status: done ? 'complete' : 'collecting', message: done ? 'Requested count reached. Collection stopped.' : 'Reading visible followers, then scrolling once every 3 seconds.' });
+      const next = { ...job, followers, status: done ? 'complete' : 'collecting', message: done ? 'Requested count reached. Your collected avatars are ready to preview.' : 'Reading visible followers, then scrolling once every 3 seconds.' };
+      await save(next);
+      if (done) await showResults(next).catch(() => {});
       return { ok: true, stop: done, count: followers.length };
     }
     await save({ ...job, status: 'paused', message: 'No new people appeared, or the page changed. Check X before explicitly resuming. This may be a partial list.' });
@@ -55,13 +77,13 @@ async function handle(message, sender) {
   }
   if (!isEditor(sender)) throw new Error('Open Followers Hero to manage collection.');
   if (message.type === 'FH_START') {
-    if (message.authorization !== 'written-permission') throw new Error('Website collection requires your confirmation of written authorization from X.');
+    if (message.acknowledgement !== 'supervised-risk') throw new Error('Acknowledge the X policy and account risk and continuous supervision before collection.');
     if (!await chrome.permissions.contains({ origins: ['https://x.com/*', 'https://pbs.twimg.com/*'] })) throw new Error('Grant the optional site permissions before collection.');
     if (job && ['collecting', 'waiting'].includes(job.status)) throw new Error('Pause or stop the existing collection first.');
     const handle = username(message.username);
-    const target = Math.max(1, Math.min(MAX_FOLLOWERS, Math.floor(Number(message.target) || 144)));
+    const target = Math.max(1, Math.min(MAX_FOLLOWERS, Math.floor(Number(message.target) || 10)));
     const followers = message.resume && job?.username === handle ? job.followers.slice(0, target) : [];
-    const next = { id: crypto.randomUUID(), username: handle, target, followers, authorization: 'written-permission', status: 'waiting', message: 'Opening X. Start explicitly in the on-page overlay.', tabId: null };
+    const next = { id: crypto.randomUUID(), username: handle, target, followers, editorTabId: Number.isInteger(message.editorTabId) ? message.editorTabId : null, acknowledgement: 'supervised-risk', status: 'waiting', message: 'Opening X. Start explicitly in the on-page overlay.', tabId: null };
     await save(next);
     try {
       const tab = await chrome.tabs.create({ url: `https://x.com/${handle}/followers`, active: true });

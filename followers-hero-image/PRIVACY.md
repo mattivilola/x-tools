@@ -8,7 +8,7 @@ Created by Matti Vilola. Sponsored and distributed by ILO Applications SL.
 
 Offline mode processes the photos or JSON you select and your poster settings on your device. Imported photos are resized and re-encoded locally. Original files are not changed. Local photo filenames may become display names in the saved collection.
 
-If you explicitly enable supervised website collection, it reads visible follower handles, display names and avatar URLs from the selected X followers page. Collection requires your attestation of written authorization from X, optional site permissions, and a separate on-page Start action. Its saved state includes the target account, requested count, collection ID, tab ID, status, timestamp and your authorization attestation.
+If you explicitly enable supervised website collection, it reads visible follower handles, display names and avatar URLs from the selected X followers page. Collection requires your acknowledgement of X’s restrictions, the account risk, your responsibility and continuous supervision, optional site permissions, and a separate on-page Start action. This acknowledgement does not state or prove that X has authorized the use. Its saved state includes the target account, requested count, collection ID, tab ID, status, timestamp and your risk acknowledgement.
 
 ## Storage and transmission
 
@@ -20,7 +20,7 @@ Choosing to open the GitHub or company links is normal external navigation and i
 
 ## Your controls and responsibility
 
-Collection waits for Start. You can pause or stop and must monitor continuously. Moving focus away pauses scanning. Restrict collection to what X has authorized and do not bypass access controls.
+Collection waits for Start. You can pause or stop and must monitor continuously. Moving focus away pauses scanning. You remain responsible for applicable X restrictions and content rights. Do not bypass access controls.
 
 Use **Clear local data** after stopping/pausing collection to remove records and settings from this browser. Closing editor tabs releases their in-memory avatars. You can uninstall the extension and revoke optional site permissions through browser settings. PNG/JPEG/JSON exports are independent downloaded files; clearing extension storage does not remove those files or copies you have shared. Do not upload personal collections to public GitHub issues.
 
