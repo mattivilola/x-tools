@@ -3,9 +3,23 @@
   "name": "Followers Manager",
   "version": "0.1.0",
   "description": "Local follower history and supervised following cleanup, with a visible live monitor and pause/stop controls.",
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
   "permissions": ["storage", "scripting"],
   "optional_host_permissions": ["https://x.com/*"],
   "background": { "service_worker": "src/background.js", "type": "module" },
-  "action": { "default_title": "Open Followers Manager" },
+  "action": {
+    "default_title": "Open Followers Manager",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "32": "assets/icon-32.png",
+      "48": "assets/icon-48.png",
+      "128": "assets/icon-128.png"
+    }
+  },
   "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'; img-src 'self' data:; font-src 'self'" }
 }

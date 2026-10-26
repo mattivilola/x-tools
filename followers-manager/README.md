@@ -40,6 +40,8 @@ Under this repository's access policy, live website operation is for operators w
 
 No installation command, build step or runtime dependency is required. After changing source, reload the extension and reopen its dashboard.
 
+The installed extension and toolbar use the retro pixel-art **X / FM** icon (FM means follower management), with bundled 16, 32, 48 and 128 pixel PNGs. The dashboard tab uses it as its favicon. Reload the unpacked extension after updating to see the new icon. Original artwork and its generation prompt are in [assets](./assets/README.md).
+
 ## Establish your history
 
 1. Leave demo mode and enter the exact handle of your signed-in X account.
