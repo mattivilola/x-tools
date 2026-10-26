@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Followers Manager</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="masthead"><a class="brand" href="app.html">Followers <strong>Manager</strong><span class="version">0.1</span></a><span>Local history. Deliberate decisions.</span></header>
+  <main>
+    <section class="intro"><div><h1>Your audience, over time.</h1><p>See what changed. Review who you follow. Stay in control of every cleanup.</p></div><button id="demo" class="secondary">Explore the demo</button></section>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <section class="account-bar" aria-label="Account and data">
+      <label>Your X handle<input id="account" placeholder="@yourhandle" autocomplete="off" maxlength="16"></label>
+      <button id="scan-followers">Scan followers</button><button id="scan-following" class="secondary">Scan following</button>
+      <button id="inspect" class="secondary">Inspect selected profiles</button>
+      <details class="import-menu"><summary>Import / export</summary><div class="import-panel">
+        <label>Observation date<input id="observed" type="datetime-local"></label>
+        <label>Archive direction<select id="direction"><option value="followers">Followers</option><option value="following">Following</option></select></label>
+        <label class="file-label">Import JSON or archive file<input id="import" type="file" accept=".json,.js"></label>
+        <button id="backup" class="secondary">Export backup</button><button id="csv" class="secondary">Export review CSV</button>
+        <label class="file-label">Restore backup<input id="restore" type="file" accept=".json"></label>
+      </div></details>
+    </section>
+    <section id="session" class="session-strip" hidden aria-label="Live session"><div><strong id="session-title"></strong><p id="session-info"></p></div><div class="actions"><button id="show-session">Open monitor</button><button id="pause-session" class="secondary">Pause</button><button id="stop-session" class="danger">Stop</button><button id="save-scan" hidden>Save scan</button></div></section>
+    <section id="scan-save" class="panel" hidden>
+      <h2>Save the observation</h2><p id="scan-summary"></p>
+      <label>Exact total shown by X (optional)<input id="reported-count" type="number" min="0" max="100000000" step="1" placeholder="Leave blank if unknown"></label>
+      <label class="checkline"><input id="coverage" type="checkbox">I checked this entire list and confirm the collected list is complete. A matching count alone does not prove coverage.</label>
+      <button id="confirm-save">Save snapshot</button><button id="cancel-save" class="secondary">Cancel</button>
+    </section>
+    <div class="overview">
+      <section class="trend panel"><div class="section-head"><h2>Follower history</h2><select id="window" aria-label="History window"><option value="30">30 days</option><option value="90">90 days</option><option value="0">All history</option></select></div><div class="trend-number"><strong id="total">—</strong><span id="delta">Import or scan to start tracking</span></div><svg id="chart" viewBox="0 0 700 160" role="img" aria-label="No observations yet"></svg><p id="chart-description" class="muted"></p><div id="history-points" class="history-points"></div></section>
+      <aside class="panel context"><h2>What the data knows</h2><p id="coverage-info">A first snapshot establishes your baseline. Later complete snapshots can reveal relationship changes.</p><dl><dt>Following observed</dt><dd id="following-total">—</dd><dt>Lost since previous snapshot</dt><dd id="lost-total">—</dd><dt>Protected by your keep list</dt><dd id="kept-total">0</dd></dl><p class="muted">A missing account may be unavailable or renamed. “Not following back” does not mean “recently unfollowed.”</p></aside>
+    </div>
+    <section class="panel review">
+      <div class="section-head"><div><h2>Review your following</h2><p class="muted">Select people deliberately. Suggestions are evidence to review, not bot verdicts.</p></div><span id="selection-count">0 selected</span></div>
+      <div class="filters"><label>Show<select id="filter"><option value="all">All following</option><option value="lost">Lost followers</option><option value="nonfollower">Not following back</option><option value="inactive">Potentially inactive</option><option value="review">Sparse profiles</option><option value="kept">Keep list</option></select></label><label class="search">Find someone<input id="search" type="search" placeholder="Name or handle"></label><button id="select-visible" class="secondary">Select visible</button><button id="clear-selection" class="secondary">Clear selection</button></div>
+      <p id="comparison-warning" class="muted"></p>
+      <div class="table-wrap"><table><thead><tr><th><span class="sr-only">Select</span></th><th>Account</th><th>Observed evidence</th><th>Keep</th></tr></thead><tbody id="people"></tbody></table></div>
+      <div class="cleanup-bar"><div><strong id="cleanup-label">Build a review selection first.</strong><p>Runs only in a visible, focused X tab with a live monitor.</p></div><button id="review-cleanup" class="danger" disabled>Review supervised unfollow</button></div>
+    </section>
+    <section class="panel"><details><summary>Saved snapshots and session history</summary><div id="snapshots"></div><div id="session-log"></div></details></section>
+    <footer>Made by Matti Vilola with {love}. Sponsored and distributed by ILO Applications SL. <button id="clear-data" class="text-button">Clear local history</button></footer>
+  </main>
+  <dialog id="consent"><form method="dialog"><h2 id="consent-title">Supervise this cleanup</h2><p id="consent-description">The extension will click Unfollow for the accounts listed below, one at a time. You must watch continuously and keep the X tab visible and focused.</p><ul id="consent-list"></ul><p class="risk">X prohibits website scripting and automated unfollowing. Your account may be restricted or suspended. This overlay and your consent do not make the process permitted or risk-free.</p><label class="checkline"><input id="authorization" type="checkbox" required>I have X’s express written authorization for this website collection or action workflow, including the required data use.</label><label class="checkline"><input id="accept" type="checkbox" required>I accept responsibility for these account actions and will monitor continuously, using Pause or Stop when needed.</label><p>Switching tabs or windows pauses the runner. Stop prevents further clicks; an action already submitted may still complete. Unfollows have no guaranteed undo.</p><div class="actions"><button value="cancel" class="secondary" formnovalidate>Cancel</button><button id="start-cleanup" type="button" class="danger">Open live monitor</button></div></form></dialog>
+  <script type="module" src="src/app.js"></script>
+</body></html>

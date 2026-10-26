@@ -17,3 +17,7 @@ jobs:
         with:
           name: followers-hero-image
           path: dist/followers-hero-image-*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: followers-manager
+          path: dist/followers-manager-*.zip

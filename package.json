@@ -4,8 +4,8 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
-    "test": "npm --prefix followers-hero-image test",
-    "check": "npm --prefix followers-hero-image run check",
-    "package": "node scripts/package.mjs"
+    "test": "npm --prefix followers-hero-image test && npm --prefix followers-manager test",
+    "check": "npm --prefix followers-hero-image run check && npm --prefix followers-manager run check",
+    "package": "node scripts/package.mjs && npm --prefix followers-manager run package"
   }
 }
