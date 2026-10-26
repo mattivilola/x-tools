@@ -1,0 +1,11 @@
+{
+  "name": "x-tools",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "npm --prefix followers-hero-image test",
+    "check": "npm --prefix followers-hero-image run check",
+    "package": "node scripts/package.mjs"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Followers Hero",
+  "version": "0.1.0",
+  "description": "Turn your X community into a poster. Made by Matti Vilola with {love}, sponsored and distributed by ILO Applications SL.",
+  "permissions": ["storage", "scripting"],
+  "optional_host_permissions": ["https://x.com/*", "https://pbs.twimg.com/*"],
+  "background": { "service_worker": "src/background.js", "type": "module" },
+  "action": { "default_title": "Open Followers Hero" },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src https://pbs.twimg.com; img-src 'self' data: blob:; font-src 'self'" }
+}
