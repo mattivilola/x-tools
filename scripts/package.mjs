@@ -12,8 +12,10 @@ mkdirSync(resolve(root, 'dist'), { recursive: true });
 const stage = mkdtempSync(join(tmpdir(), 'followers-hero-package-'));
 try {
   for (const name of ['manifest.json', 'app.html', 'style.css', 'src', 'PRIVACY.md']) cpSync(join(tool, name), join(stage, name), { recursive: true });
+  mkdirSync(join(stage, 'assets'));
+  for (const size of [16, 32, 48, 128]) copyFileSync(join(tool, 'assets', `icon-${size}.png`), join(stage, 'assets', `icon-${size}.png`));
   copyFileSync(join(root, 'LICENSE'), join(stage, 'LICENSE'));
   // ZIP includes only runtime files and license, never collections or developer output.
-  execFileSync('zip', ['-q', '-r', '-FS', output, 'manifest.json', 'app.html', 'style.css', 'src', 'PRIVACY.md', 'LICENSE'], { cwd: stage });
+  execFileSync('zip', ['-q', '-r', '-FS', output, 'manifest.json', 'app.html', 'style.css', 'src', 'assets', 'PRIVACY.md', 'LICENSE'], { cwd: stage });
   console.log(output);
 } finally { rmSync(stage, { recursive: true, force: true }); }

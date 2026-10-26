@@ -6,6 +6,20 @@
   "permissions": ["storage", "scripting"],
   "optional_host_permissions": ["https://x.com/*", "https://pbs.twimg.com/*"],
   "background": { "service_worker": "src/background.js", "type": "module" },
-  "action": { "default_title": "Open Followers Hero" },
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
+  "action": {
+    "default_title": "Open Followers Hero",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "32": "assets/icon-32.png",
+      "48": "assets/icon-48.png",
+      "128": "assets/icon-128.png"
+    }
+  },
   "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; connect-src https://pbs.twimg.com; img-src 'self' data: blob:; font-src 'self'" }
 }

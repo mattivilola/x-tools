@@ -10,6 +10,8 @@ A Chromium extension for turning community avatars into celebration posters, wit
 
 [All X Tools](../README.md) · [MIT License](../LICENSE) · [Shared X policy](../docs/x-platform-policy.md) · [Privacy](./PRIVACY.md)
 
+![Followers Hero retro X and FH icon](./assets/icon-128.png)
+
 ## Important access restriction
 
 X’s [Terms](https://x.com/en/tos) restrict scraping without written permission. Its [Automation rules](https://help.x.com/en/rules-and-policies/x-automation) prohibit non-API website scripting and warn of account suspension. Continuous supervision, a visible overlay, slower scrolling and user responsibility do **not** make website collection permitted.
@@ -42,6 +44,8 @@ This is an unpacked Manifest V3 extension, not an extension-store listing.
 5. Open **Followers Hero** from the extensions menu. It opens the local editor in a tab.
 
 No compilation or npm install is required to use the extension. Reload it from the extensions page after editing its source.
+
+The retro X / FH icon appears in the browser's extensions list and toolbar, as well as the editor header and tab. If you installed an earlier unpacked version, use its **Reload** button in `chrome://extensions` or `edge://extensions` to refresh the icon. Pin Followers Hero from the browser's extensions menu if you want it always visible in the toolbar. [Artwork and generation prompt](./assets/README.md).
 
 ## Offline poster workflow
 

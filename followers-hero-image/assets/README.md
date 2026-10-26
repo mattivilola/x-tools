@@ -1,0 +1,9 @@
+# Followers Hero icon
+
+Original retro pixel-art icon generated for this project on 2026-10-26 with Codex's built-in image generation tool. The large X is an independently drawn chunky letterform; the small **FH** badge identifies Followers Hero. This is not an official X logo or endorsement.
+
+`icon-source.png` preserves the generated master, including transparency. `icon-16.png`, `icon-32.png`, `icon-48.png` and `icon-128.png` are resized PNG exports used by the browser extension. The manifest declares both extension-management icons and toolbar/action icons; the editor also uses the artwork in its header and favicon. The install ZIP includes the four runtime sizes.
+
+## Generation prompt
+
+Use case: logo-brand. Asset type: production browser extension icon for Followers Hero Image. Create one square, crisp retro 1980s desktop / 8-bit pixel-art icon. A large bold pixelated letter X is the dominant central symbol, original chunky diagonal construction rather than a tracing of the thin official X logo. Warm ivory X with a small hard offset dark-plum shadow, against a muted lavender square tile with lightly stepped pixel corners and a dark plum outline. Add a compact contrasting warm golden-yellow badge integrated at the bottom-right, containing the exact uppercase text "FH" in very bold dark plum pixel lettering, spelled F H, no other words. The badge occupies roughly the lower-right third, with both letters clearly legible. Strong flat colors, clean hard pixel edges, minimal depth, no grain, no gradients, no tiny ornaments. Designed to remain recognizable at 16px, 32px, 48px and 128px, high contrast and generous strokes. Tile fills the image with only a very narrow transparent outer margin. Transparent background outside the tile. Single icon only, straight-on, no mockup, no multiple variations, no surrounding text, no watermark.
