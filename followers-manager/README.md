@@ -4,9 +4,7 @@
 
 A local-first Chromium extension for follower history, relationship changes and **continuously supervised unfollow sessions**. Initial implementation: **v0.1.0**.
 
-**Made by [Matti Vilola](https://github.com/mattivilola) with {love}.**
-
-**Sponsored and distributed by [ILO Applications SL](https://iloapps.com).**
+**Made by [Matti Vilola](https://github.com/mattivilola) with ❤️, sponsored and distributed by [ILO Applications SL](https://iloapps.com).**
 
 [All X Tools](../README.md) · [Privacy](./PRIVACY.md) · [Source checks](./research.md) · [Implementation and limits](./implementation-plan.md) · [Shared X access policy](../docs/x-platform-policy.md)
 
