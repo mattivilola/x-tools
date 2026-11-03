@@ -36,6 +36,7 @@ function makeChromeMock() {
     injected: [],
     sentMessages: [],
     writes: 0,
+    removedTabs: [],
   };
   state.storage.fmData = { keepList: [] };
 
@@ -86,6 +87,8 @@ function makeChromeMock() {
         if (!tab) throw new Error('No such tab: ' + id);
         return clone(tab);
       },
+      async query(options) { return [...state.tabs.values()].filter((tab) => tab.url === options.url).map(clone); },
+      async remove(id) { state.removedTabs.push(id); state.tabs.delete(id); await events.tabsRemoved.emit(id); },
       async update(id, options) {
         const tab = state.tabs.get(id);
         if (!tab) throw new Error('No such tab: ' + id);
@@ -321,13 +324,44 @@ test('background service enforces supervised session ownership and terminal-stat
       assert.equal(state.storage.fmSession.records.length, 2);
       await send({ type: 'fm:pause', id: scanId }, appSender);
       assert.equal(state.storage.fmSession.records.length, 3, 'Pause flushes buffered records');
+      await send({ type: 'fm:saved', id: scanId }, appSender);
+      assert.ok(state.storage.fmSession.savedAt);
       await send({ type: 'fm:resume', id: scanId }, scanSender);
+      assert.equal(state.storage.fmSession.savedAt, null, 'resuming a saved partial scan makes its new observation available to save again');
       await send({ type: 'fm:update', id: scanId, recordChanges: [{ username: 'dora' }] }, scanSender);
       await send({ type: 'fm:stop', id: scanId }, appSender);
       assert.equal(state.storage.fmSession.records.length, 4, 'Stop flushes buffered records');
       await send({ type: 'fm:update', id: scanId, recordChanges: [{ username: 'late' }] }, scanSender);
       assert.equal(state.storage.fmSession.records.length, 4, 'late deltas cannot alter a stopped scan');
     } finally { Date.now = originalNow; }
+
+    // Closing a dashboard requires a replacement; only the extension-owned X tab closes.
+    response = await send({ ...baseStart, mode: 'scan', queue: [] }, appSender);
+    const completedScanId = response.session.id, completedTab = response.session.tabId;
+    const completedSender = { ...ownedSender, tab: { id: completedTab } };
+    await send({ type: 'fm:resume', id: completedScanId }, completedSender);
+    response = await send({ type: 'fm:update', id: completedScanId, recordChanges: [{ username: 'alice' }], status: 'complete' }, completedSender);
+    assert.equal(response.ok, true); assert.equal(state.storage.fmSession.status, 'complete');
+    assert.equal(state.storage.fmSession.records.length, 1, 'results are durable before closing the processing tab');
+    assert.equal(state.removedTabs.includes(completedTab), true);
+    const dashboards = [...state.tabs.values()].filter((tab) => tab.url === chrome.runtime.getURL('app.html'));
+    assert.equal(dashboards.length, 1, 'a closed dashboard is replaced');
+    const createdBeforeReturn = state.tabsCreated;
+    await send({ type: 'fm:return', id: completedScanId }, appSender);
+    assert.equal(state.tabsCreated, createdBeforeReturn, 'return reuses an existing dashboard');
+    assert.equal((await send({ type: 'fm:saved', id: completedScanId }, completedSender)).ok, false);
+    await send({ type: 'fm:saved', id: completedScanId }, appSender);
+    assert.ok(state.storage.fmSession.savedAt, 'saving is recorded without deleting collected records');
+
+    response = await send({ ...baseStart, mode: 'scan', queue: [] }, appSender);
+    const changedId = response.session.id, changedTab = response.session.tabId;
+    state.tabs.get(changedTab).url = 'https://x.com/home';
+    await send({ type: 'fm:update', id: changedId, status: 'complete' }, { ...ownedSender, tab: { id: changedTab } });
+    assert.equal(state.tabs.has(changedTab), true, 'a processing tab navigated elsewhere is never closed');
+
+    response = await send({ ...baseStart, action: 'unfollow-unverified-nonfollowers' }, appSender);
+    assert.equal(response.ok, true, 'new cleanup action is supported');
+    assert.equal((await send({ type: 'fm:update', id: response.session.id, status: 'complete' }, { ...ownedSender, tab: { id: response.session.tabId } })).ok, false, 'unfinished actions cannot claim completion');
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     if (previousChrome) Object.defineProperty(globalThis, 'chrome', previousChrome);

@@ -46,7 +46,8 @@
     const pauseButton = el('button', 'Pause', 'secondary'); pauseButton.id = 'fm-pause'; pauseButton.addEventListener('click', () => { void pause('Paused by you. Press Resume when ready.'); });
     const stop = el('button', 'Stop', 'stop'); stop.id = 'fm-stop'; stop.addEventListener('click', () => { void stopRun(); });
     const close = el('button', 'Close monitor', 'close'); close.addEventListener('click', async () => { await stopRun(); host.remove(); });
-    footer.append(resume, pauseButton, stop, close); panel.append(header, main, footer); shadow.append(panel); document.documentElement.append(host); render();
+    const back = el('button', 'Return to dashboard', 'secondary'); back.id = 'fm-return'; back.addEventListener('click', () => { void message('return').catch((error) => { session.message = error.message; render(); }); });
+    footer.append(resume, pauseButton, stop, back, close); panel.append(header, main, footer); shadow.append(panel); document.documentElement.append(host); render();
   }
   function render() {
     if (!shadow || !session) return;
@@ -63,6 +64,7 @@
     const resume = shadow.querySelector('#fm-resume'); resume.textContent = session.status === 'ready' ? (session.mode === 'follow' ? 'Begin supervised follow back' : session.mode === 'cleanup' ? 'Begin supervised unfollow' : 'Begin reading') : 'Resume';
     resume.disabled = session.status === 'running' || terminal.has(session.status) || busy;
     shadow.querySelector('#fm-pause').disabled = session.status !== 'running'; shadow.querySelector('#fm-stop').disabled = terminal.has(session.status);
+    shadow.querySelector('#fm-return').hidden = session.status !== 'complete';
     const log = shadow.querySelector('.log'); log.replaceChildren(...session.results.slice(-8).reverse().map((r) => el('p', `@${r.username}: ${r.outcome}${r.detail ? ` — ${r.detail}` : ''}`)));
   }
   function signedInAccount() {
@@ -157,7 +159,12 @@
       const record = recordOf(cell);
       if (target.id && record.id !== target.id) throw new Error('The stable account ID could not be verified. No action taken.');
       if (record.protected) throw new Error('The account is now protected. No action taken.');
-      const reciprocalReason = session.action === 'unfollow-nonfollowers' || target.reasons.some((r) => /No longer observed|Does not appear among/i.test(r));
+      const preserveVerified = session.action === 'unfollow-unverified-nonfollowers';
+      if (preserveVerified && (record.verified !== false || record.followsYou !== false)) {
+        await message('update', { index: session.index, result: { outcome: 'skipped', detail: 'Verified, follows you, or relationship evidence unavailable. No unfollow submitted.' } });
+        continue;
+      }
+      const reciprocalReason = session.action === 'unfollow-nonfollowers' || preserveVerified || target.reasons.some((r) => /No longer observed|Does not appear among/i.test(r));
       if (reciprocalReason && readers.followsYou(cell)) {
         await message('update', { index: session.index, result: { outcome: 'skipped', detail: 'X now shows this account follows you. No unfollow submitted.' } });
         continue;
@@ -174,6 +181,16 @@
       await guard();
       const confirm = dialog.querySelector('[data-testid="confirmationSheetConfirm"]');
       if (!ownedDialog() || confirm.disabled || !confirm.isConnected) throw new Error('The confirmation changed. No action taken.');
+      if (preserveVerified) {
+        if (!cell.isConnected || usernameOf(cell) !== target.username) throw new Error('The target changed before confirmation. No unfollow submitted.');
+        const latest = recordOf(cell);
+        if (target.id && latest.id !== target.id) throw new Error('The target identity changed before confirmation.');
+        if (latest.verified !== false || latest.followsYou !== false || latest.protected) {
+          ownedDialog().querySelector('[data-testid="confirmationSheetCancel"]')?.click(); confirmationFor = null;
+          await message('update', { index: session.index, result: { outcome: 'skipped', detail: 'Account protection changed before confirmation. No unfollow submitted.' } });
+          continue;
+        }
+      }
       const index = session.index; pending = true; render(); confirm.click();
       // No more destructive clicks until a rendered result is positively observed.
       let confirmed = false;

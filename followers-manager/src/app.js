@@ -3,9 +3,10 @@ import { MAX_QUEUE, isKept } from './session.js';
 import { PAGE_SIZE, actionBatch, minimumDuration } from './performance.js';
 const $ = (id) => document.getElementById(id);
 const cleanData = () => ({ version: 1, snapshots: [], keepList: [] });
-const actionIds = ['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-all'];
+const actionIds = ['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-unverified-nonfollowers', 'unfollow-all'];
 let data = cleanData(), session = null, rows = [], selected = new Set(), demo = false, currentAccount = '', prepared = null;
 let page = 0, logSession = '', logCount = 0;
+let completionShown = '';
 const rowNodes = new Map();
 const text = (tag, value, cls) => { const node = document.createElement(tag); node.textContent = value; if (cls) node.className = cls; return node; };
 const date = (value) => new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -126,7 +127,8 @@ function renderSession() {
   $('session-title').textContent = `${session.mode} · ${session.status} · @${session.account}`;
   $('session-info').textContent = `${session.mode === 'scan' ? `${session.records.length} observed accounts` : `${session.index}/${session.queue.length} processed`} — ${session.message}`;
   $('pause-session').disabled = session.status !== 'running'; $('stop-session').disabled = ['complete', 'stopped', 'error'].includes(session.status);
-  $('save-scan').hidden = session.mode !== 'scan' || !session.records.length || session.status === 'running';
+  $('save-scan').hidden = session.mode !== 'scan' || !session.records.length || session.status === 'running' || !!session.savedAt;
+  if (session.mode !== 'scan' || session.status === 'running' || !session.records.length || session.savedAt) $('scan-save').hidden = true;
   if (logSession !== session.id || logCount > session.results.length) { $('session-log').replaceChildren(); logSession = session.id; logCount = 0; }
   $('session-log').append(...session.results.slice(logCount).map((r) => text('p', `${date(r.at)} · @${r.username}: ${r.outcome} — ${r.detail}`)));
   logCount = session.results.length;
@@ -184,10 +186,23 @@ $('batch-size').addEventListener('change', () => { $('accept').checked = false; 
 function updateFocusNote() { $('focus-note').textContent = $('pause-focus').checked ? 'Switching tabs or windows pauses this session. Return to the monitor and press Resume to continue.' : 'This session can continue in a background tab. Keep monitoring its progress and return to use Pause or Stop. Browsers may slow down background work; this is not a guarantee of continuous execution.'; }
 $('pause-focus').addEventListener('change', updateFocusNote);
 $('export-action').addEventListener('click', attempt(() => { if (prepared?.queue) download('action-selection.csv', exportCsv(prepared.queue), 'text/csv'); }));
-for (const action of ['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-all']) $(action).addEventListener('click', attempt(() => prepareStart(action.startsWith('follow-') ? 'follow' : 'cleanup', undefined, action)));
+for (const action of ['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-unverified-nonfollowers', 'unfollow-all']) $(action).addEventListener('click', attempt(() => prepareStart(action.startsWith('follow-') ? 'follow' : 'cleanup', undefined, action)));
 function saveScan() {
   $('scan-save').hidden = false; $('coverage').checked = false; $('reported-count').value = '';
   $('scan-summary').textContent = `${session.records.length} ${session.direction} records observed for @${session.account}. Scrolling stopping is not proof of completeness. An unchecked snapshot is saved as partial.`;
+}
+function showCompletion() {
+  if (demo || session?.status !== 'complete' || completionShown === session.id) return;
+  completionShown = session.id;
+  currentAccount = session.account; $('account').value = currentAccount; selected.clear(); page = 0; render();
+  if (session.mode === 'scan' && session.records.length && !session.savedAt) {
+    saveScan(); announce('Scan finished. Review the observation below and choose Save snapshot.');
+    $('save-results-title').focus();
+  } else {
+    $('history-details').open = true;
+    announce(session.mode === 'scan' ? 'Scan complete. Saved observations are available below.' : `Session complete: ${session.index} accounts processed. Results are saved locally in session history.`);
+    $('session').scrollIntoView({ block: 'start' });
+  }
 }
 $('demo').addEventListener('click', attempt(async () => {
   if (demo) { data = (await chrome.storage.local.get('fmData')).fmData || cleanData(); demo = false; currentAccount = data.snapshots.at(-1)?.account || ''; $('demo').textContent = 'Explore the demo'; announce('Returned to your local history.'); }
@@ -229,7 +244,7 @@ $('confirm-save').addEventListener('click', attempt(async () => {
   // Carrying the other direction forward would misrepresent its observation time. Keep both directions partial unless imported together.
   const direction = session.direction, complete = $('coverage').checked;
   const total = count ?? (complete ? session.records.length : null);
-  const candidate = { account: session.account, observedAt: session.updatedAt, source: 'browser-scan', coverage: 'partial', followers: direction === 'followers' ? session.records : [], following: direction === 'following' ? session.records : [], followerCount: direction === 'followers' ? total : null, followingCount: direction === 'following' ? total : null };
+  const candidate = { account: session.account, observedAt: session.completedAt || session.updatedAt, source: 'browser-scan', coverage: 'partial', followers: direction === 'followers' ? session.records : [], following: direction === 'following' ? session.records : [], followerCount: direction === 'followers' ? total : null, followingCount: direction === 'following' ? total : null };
   // Pair only observations taken within 30 minutes, preserving conservative coverage if either was partial.
   if (last && last.source.startsWith('browser-scan') && Math.abs(Date.parse(last.observedAt) - Date.parse(candidate.observedAt)) < 1800000 && last[direction].length === 0) {
     candidate[direction === 'followers' ? 'following' : 'followers'] = last[direction === 'followers' ? 'following' : 'followers'];
@@ -237,7 +252,7 @@ $('confirm-save').addEventListener('click', attempt(async () => {
     candidate.coverage = complete && last.source === 'browser-scan-verified' ? 'complete' : 'partial';
   }
   candidate.source = complete ? 'browser-scan-verified' : 'browser-scan';
-  addSnapshot(candidate); currentAccount = session.account; $('account').value = currentAccount; await persist(); $('scan-save').hidden = true; selected.clear(); render(); announce('Snapshot saved locally. Coverage and counts are shown beside the observation.');
+  addSnapshot(candidate); currentAccount = session.account; $('account').value = currentAccount; await persist(); await command('saved'); $('scan-save').hidden = true; selected.clear(); render(); announce('Snapshot saved locally. Coverage and counts are shown beside the observation.');
 }));
 $('import').addEventListener('change', attempt(async (event) => {
   const file = event.target.files[0]; if (!file) return;
@@ -277,7 +292,7 @@ $('clear-data').addEventListener('click', attempt(async () => {
 }));
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes.fmSession) { session = changes.fmSession.newValue || null; renderSession(); }
+  if (changes.fmSession) { session = changes.fmSession.newValue || null; renderSession(); showCompletion(); }
   if (changes.fmData && !demo) { data = changes.fmData.newValue || cleanData(); render(); }
 });
 // Profile inspection enriches the latest record without fabricating missing activity.
@@ -294,6 +309,6 @@ async function init() {
   const saved = await chrome.storage.local.get(['fmData', 'fmSession']); data = saved.fmData || cleanData(); session = saved.fmSession || null;
   currentAccount = data.snapshots.at(-1)?.account || session?.account || ''; $('account').value = currentAccount;
   $('observed').value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-  render(); await enrichInspection(session);
+  render(); showCompletion(); await enrichInspection(session);
 }
 void attempt(init)();

@@ -31,6 +31,28 @@ function member(id, username, extra = {}) {
   };
 }
 
+test('keep-verified-and-followers cleanup excludes unknown, stale and positive follower evidence', () => {
+  const now = Date.parse(afterAt) + 1000;
+  const fresh = { verified: false, followsYou: false, observedAt: afterAt };
+  const input = snapshot({ coverage: 'partial', followers: [member('mutual', 'mutual'), member('rename', 'oldname')], following: [
+    member('eligible', 'eligible', fresh),
+    member('verified', 'verified', { ...fresh, verified: true }),
+    member('unknown', 'unknown', { ...fresh, verified: null }),
+    member('stale', 'stale', { ...fresh, observedAt: beforeAt }),
+    member('future', 'future', { ...fresh, observedAt: '2026-10-11T00:00:00Z' }),
+    member('mutual', 'mutual', fresh),
+    member('rename', 'newname', fresh),
+    member('direct', 'direct', { ...fresh, followsYou: true }),
+    member('unknownrel', 'unknownrel', { ...fresh, followsYou: null }),
+    member('kept', 'kept', fresh), member('private', 'private', { ...fresh, protected: true }),
+  ] });
+  const result = buildActionQueue(input, 'unfollow-unverified-nonfollowers', ['kept'], now);
+  assert.deepEqual(result.queue.map((row) => row.username), ['eligible']);
+  assert.equal(result.excluded, 10); assert.match(result.warning, /Unknown or stale verification/);
+  const complete = snapshot({ following: [member('unknownrel', 'unknownrel', { ...fresh, followsYou: null })] });
+  assert.equal(buildActionQueue(complete, 'unfollow-unverified-nonfollowers', [], now).queue.length, 1, 'complete compatible follower absence can qualify, with live reciprocity checked again');
+});
+
 function snapshot({
   accountName = account,
   observedAt = beforeAt,

@@ -2,7 +2,7 @@
 
 **Understand your audience. Keep a following list you actually want.**
 
-A local-first Chromium extension for follower history, relationship changes and **reviewed follow-back and unfollow sessions**. Version: **v0.3.0**.
+A local-first Chromium extension for follower history, relationship changes and **reviewed follow-back and unfollow sessions**. Version: **v0.4.0**.
 
 **Made by [Matti Vilola](https://github.com/mattivilola) with ❤️, sponsored and distributed by [ILO Applications SL](https://iloapps.com).**
 
@@ -45,7 +45,7 @@ The installed extension and toolbar use the retro pixel-art **X / FM** icon (FM 
 1. Leave demo mode and enter the exact handle of your signed-in X account.
 2. Choose **Scan followers**. Read the notice, attest to the required authorization, accept continuous supervision, and grant X site access if you intend to proceed.
 3. In the new X tab, check the account and overlay, then choose **Begin reading**. Keep this tab visible and focused while the scan scrolls, or explicitly turn off **Pause if losing focus** in the start dialog to permit background continuation. Start and Resume always require a focused monitor.
-4. After collection stops, return to the dashboard and choose **Save scan**. Enter an exact total from X if known. Leave coverage unchecked unless you independently verified the full list. No more loaded cards does not establish completeness.
+4. On completion, the tool closes its own processing tab and returns to the dashboard with **Save the observation** open. If you paused or stopped early, return manually and choose **Save scan**. Enter an exact total from X if known. Leave coverage unchecked unless you independently verified the full list. No more loaded cards does not establish completeness.
 5. Repeat for **Scan following**. Opposite-direction browser observations within 30 minutes can be paired. They become complete only when you explicitly verified both lists; concurrent relationship changes can still make the combined observation inconsistent.
 6. Repeat later to see count progress and compare relationships. In the saved-snapshots section, **Confirm full coverage** is available for paired partial data after you independently verify both lists.
 
@@ -60,9 +60,14 @@ The **Account actions** panel prepares these fixed selections, then opens the re
 - **Follow back all verified followers:** observed followers with a real verified-badge observation; already-followed accounts are excluded. The badge and current button are checked again before following.
 - **Follow back all followers:** observed followers you are not already following. A current Following button causes a skip.
 - **Unfollow non-followers:** accounts in your following list with fresh explicit non-reciprocity evidence, or absence from a comparable complete follower list. Unknown membership from partial data is excluded. A current Follows you indicator causes a skip.
+- **Unfollow except verified & my followers:** only observed nonfollowers with fresh explicit unverified evidence (at most seven days old). Keeps verified accounts, known followers, private/kept accounts and unknown/stale verification. Refresh your scans if no eligible records are available. Before the unfollow and again before confirmation, a current verified badge or Follows you indicator causes a skip.
 - **Unfollow all following:** the eligible accounts in your observed following list, including mutuals. Keep-list and known private-account protections still apply.
 
 “All” refers to the saved observed records, not a guarantee that every account on X has been discovered. Legacy scans have unknown verification and relationship fields; rescan before using badge-based shortcuts. The dialog shows the selection count and first 500 targets; **Export selection CSV** contains the full fixed selection. No action starts until consent and the focused monitor's **Begin**. A follow succeeds only when X renders the matching Following button. Unknown results pause instead of retrying.
+
+### Returning after completion
+
+Completed scans, follow-back/unfollow batches and final profile inspections return to the existing dashboard (or open one if it was closed). Only the session-owned processing tab is closed, and only if it still has the expected URL. Results are stored before closing. A scan opens **Save the observation**, with complete-coverage confirmation unchecked; saving remains your decision. Once saved, this prompt stays closed on reload. Follow/unfollow outcomes are already saved in session history, which opens on return. Paused, stopped or uncertain sessions stay available for review and do not automatically close. If return fails, the completed monitor offers **Return to dashboard** for an explicit retry.
 
 ### First 5 test batch and duration
 
@@ -99,7 +104,7 @@ Select accounts and choose **Inspect selected profiles** for a read-only supervi
 
 A fresh sample whose newest observed public post is at least 90 days old can trigger an inactivity suggestion. That is not proof of inactivity: the timeline may be incomplete, a person may only read X, and profiles may remain useful. Unknown, protected and stale evidence is not treated as inactivity. A confirmed empty bio is a weak review signal. A failed read or an old empty field is shown as **Bio not collected** rather than evidence of a sparse profile. New scans read the bio from supported rendered list-card layouts, including bios with profile mentions; existing history is preserved. Rescan or inspect profiles to enrich old unknown fields. This version does not claim reliable bot detection or automatically unfollow based on a heuristic.
 
-Profile observations are applied while the dashboard is open; the latest inspection results remain in the session log. If the dashboard was closed, reopen it before another session to retain that evidence. Automatic real-time relationship event tracking is outside this browser edition.
+Profile observations are applied while the dashboard is open; the latest inspection results remain in the session log. If the dashboard was closed, it reopens on final completion to apply that evidence; reopen it manually if an inspection was stopped early. Automatic real-time relationship event tracking is outside this browser edition.
 
 ## Import and export
 
@@ -134,7 +139,7 @@ npm --prefix followers-manager run check
 npm --prefix followers-manager run package
 ```
 
-Packaging produces `dist/followers-manager-0.3.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
+Packaging produces `dist/followers-manager-0.4.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
 
 Fixtures simulate rendered X pages and a granted site permission in an isolated temporary extension. They do not establish live X compatibility, real provider acceptance, or permission to automate. Do not test against a live account without the required X authorization and account owner's instruction.
 

@@ -520,12 +520,13 @@ export function buildReview(snapshotInput, previousInput = null, keepList = [], 
 }
 
 export function buildActionQueue(snapshotInput, action, keepList = [], now = Date.now()) {
-  const supportedActions = new Set(['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-all']);
+  const supportedActions = new Set(['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-unverified-nonfollowers', 'unfollow-all']);
   if (!supportedActions.has(action)) throw new TypeError('Unknown action queue type.');
   const snapshot = normalizeSnapshot(snapshotInput);
   if (!Number.isFinite(now)) throw new TypeError('now must be a timestamp in milliseconds.');
   const keepEntries = normalizeKeepList(keepList);
   const followingAction = action.startsWith('follow-');
+  const preserveVerified = action === 'unfollow-unverified-nonfollowers';
   const candidates = followingAction ? snapshot.followers : snapshot.following;
   const warnings = [];
   if (snapshot.coverage !== 'complete') {
@@ -534,7 +535,7 @@ export function buildActionQueue(snapshotInput, action, keepList = [], now = Dat
 
   let followerIdentityMode = null;
   let followerKeys = new Set();
-  if (action === 'unfollow-nonfollowers') {
+  if (action === 'unfollow-nonfollowers' || preserveVerified) {
     if (snapshot.coverage === 'complete') {
       followerIdentityMode = resolveIdentityMode(snapshot.followers, snapshot.following);
       if (followerIdentityMode) {
@@ -544,6 +545,7 @@ export function buildActionQueue(snapshotInput, action, keepList = [], now = Dat
       }
     }
   }
+  if (preserveVerified) warnings.push('Verified accounts and known followers are kept. Unknown or stale verification is excluded; rescan following to refresh evidence.');
 
   const handleCounts = new Map();
   for (const record of candidates) {
@@ -560,6 +562,14 @@ export function buildActionQueue(snapshotInput, action, keepList = [], now = Dat
     if (record.username === snapshot.account || record.protected === true || isKept(record, keepEntries)) {
       excluded += 1;
       continue;
+    }
+    if (preserveVerified) {
+      const observed = recordDateMs(record.observedAt);
+      if (record.verified !== false || observed === null || observed > now || now - observed > 7 * DAY_MS ||
+          snapshot.followers.some((follower) => sameKnownMember(record, follower))) {
+        excluded += 1;
+        continue;
+      }
     }
 
     let reasons;
@@ -598,6 +608,7 @@ export function buildActionQueue(snapshotInput, action, keepList = [], now = Dat
         reasons = ['No matching member appears in the complete follower set; absence does not identify an unfollow, block, deletion, or suspension.'];
       }
     }
+    if (preserveVerified) reasons.push('No verified badge was observed recently; verified accounts and followers must remain protected at execution.');
     queue.push({ ...record, reasons });
   }
   return { queue, excluded, warning: warnings.join(' ') };
