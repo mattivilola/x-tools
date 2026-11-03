@@ -23,9 +23,11 @@ function snapshot(time, followers) {
   return { account: 'fixture', observedAt: time, source: 'synthetic-fixture', coverage: 'complete', followers: records.filter((r) => followers.includes(r.username)), following: records, followerCount: followers.length, followingCount: 2 };
 }
 function fixture(path) {
-  const cards = ['alice', 'bruno'].map((name, i) => `<div data-testid="UserCell" style="padding:25px;margin:20px;width:500px;border:1px solid #ccc"><a href="/${name}">${name} fixture</a><div data-testid="UserDescription">Synthetic profile</div><button data-testid="${101 + i}-unfollow" onclick="openConfirm('${name}',${101 + i},this)">Following</button></div>`).join('');
+  const followerPage = path.endsWith('/followers');
+  const cards = ['alice', 'bruno'].map((name, i) => `<div data-testid="UserCell" role="button" style="padding:25px;margin:20px;width:500px;border:1px solid #ccc"><a href="/${name}"><span dir="auto">${name} fixture</span>${i === 0 ? '<svg aria-label="Verified account"></svg>' : ''}</a><a href="/${name}"><span dir="auto">@${name}</span></a>${i === 0 ? '<span data-testid="userFollowIndicator">Follows you</span>' : ''}<div dir="auto">Builds synthetic tools with <a href="/otherperson">@otherperson</a>.</div><button data-testid="${101 + i}-${followerPage ? 'follow' : 'unfollow'}" onclick="${followerPage ? 'followPerson' : 'openConfirm'}('${name}',${101 + i},this)">${followerPage ? 'Follow back' : 'Following'}</button></div>`).join('');
   return `<!doctype html><meta charset="utf-8"><title>X local fixture</title><body style="font:16px system-ui;padding:40px"><a data-testid="AppTabBar_Profile_Link" href="/fixture">Your profile</a><h1>Local X fixture</h1>${cards}<script>
-  window.fixtureClicks=0;
+  window.fixtureClicks=0; window.fixtureFollows=0;
+  function followPerson(name,id,button){window.fixtureFollows++;button.dataset.testid=id+'-unfollow';button.textContent='Following';}
   function openConfirm(name,id,button){const dialog=document.createElement('div');dialog.dataset.testid='confirmationSheetDialog';dialog.setAttribute('role','alertdialog');dialog.innerHTML='<p>Unfollow @'+(window.fixtureWrong?'wrongaccount':name)+'?</p><button data-testid="confirmationSheetConfirm">Unfollow</button><button data-testid="confirmationSheetCancel">Cancel</button>';document.body.append(dialog);dialog.querySelector('[data-testid=confirmationSheetCancel]').onclick=()=>dialog.remove();dialog.querySelector('[data-testid=confirmationSheetConfirm]').onclick=()=>{window.fixtureClicks++;button.dataset.testid=id+'-follow';button.textContent='Follow';dialog.remove();};}
   </script></body>`;
 }
@@ -51,6 +53,7 @@ function fixture(path) {
     const id = new URL(worker.url()).host;
     const app = await context.newPage(); app.on('pageerror', (error) => errors.push(error.message));
     await app.goto(`chrome-extension://${id}/app.html`);
+    if (!process.argv.includes('--follow-only')) {
     await app.locator('#demo').click(); await app.waitForFunction(() => document.querySelectorAll('#people tr').length === 5);
     assert.equal(await app.locator('#total').textContent(), '4'); assert.equal(xRequests, 0);
     assert.equal(await app.locator('#review-cleanup').isDisabled(), true);
@@ -125,6 +128,69 @@ function fixture(path) {
     await app.locator('#confirm-save').click(); await app.waitForFunction(() => document.getElementById('coverage-info').textContent.includes('Coverage: partial'));
     assert.equal(await app.locator('#lost-total').textContent(), 'Unknown');
     check('a real rendered-card scan saves partial coverage and cannot invent follower losses');
+
+    const collected = await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession.records);
+    assert.equal(collected.length, 2); assert.equal(collected[0].bioObserved, true);
+    assert.match(collected[0].bio, /Builds synthetic tools with @otherperson/);
+    assert.equal(collected[0].username, 'alice'); assert.equal(collected[0].verified, true);
+    assert.equal(collected[0].followsYou, true); assert.equal(collected[1].followsYou, false);
+    check('realistic list cards preserve bios with mentions, identity, verification and reciprocity');
+    await app.locator('#filter').selectOption('nonfollower');
+    assert.match(await app.locator('#people').textContent(), /bruno/); assert.doesNotMatch(await app.locator('#people').textContent(), /alice/);
+    await app.locator('#filter').selectOption('all');
+
+    await app.locator('#unfollow-nonfollowers').click();
+    assert.match(await app.locator('#consent-list').textContent(), /bruno/); assert.doesNotMatch(await app.locator('#consent-list').textContent(), /alice/);
+    await app.getByRole('button', {name:'Cancel',exact:true}).click();
+    await app.locator('#unfollow-all').click(); assert.match(await app.locator('#consent-description').textContent(), /2 selected/);
+    await app.getByRole('button', {name:'Cancel',exact:true}).click();
+    check('both bulk unfollow shortcuts review the correct observed subsets without acting');
+
+    await app.locator('#scan-following').click(); await app.locator('#pause-focus').uncheck();
+    await app.locator('#authorization').check(); await app.locator('#accept').check();
+    const bgPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const bg = await bgPromise;
+    await bg.goto('https://x.com/fixture/following'); await bg.bringToFront(); await bg.locator('#fm-resume').click();
+    await bg.locator('.status').filter({hasText:'observed accounts'}).waitFor(); await app.bringToFront();
+    await bg.locator('.status').filter({hasText:'No more cards observed'}).waitFor({timeout:35000});
+    assert.equal((await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession)).status, 'complete');
+    assert.equal(await bg.evaluate(() => window.fixtureClicks), 0);
+    check('turning off Pause if losing focus permits a background read-only scan to complete');
+
+    } else {
+      await app.locator('#account').fill('fixture'); await app.locator('#account').dispatchEvent('change');
+    }
+
+    const followerData = snapshot(new Date().toISOString(), ['alice','bruno']); followerData.following=[]; followerData.followingCount=0;
+    followerData.followers[0].verified = true; followerData.followers[1].verified = false;
+    await app.locator('.import-menu summary').click();
+    await app.locator('#import').setInputFiles({name:'followers.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(followerData))});
+    await app.waitForFunction(() => document.getElementById('import').value === ''); await app.locator('.import-menu summary').click();
+    await app.locator('#follow-all').click(); assert.match(await app.locator('#consent-description').textContent(), /2 selected/);
+    await app.getByRole('button', {name:'Cancel',exact:true}).click();
+    await app.locator('#follow-verified').click(); assert.match(await app.locator('#consent-description').textContent(), /1 selected/);
+    assert.equal(await app.locator('#pause-focus').isChecked(), true, 'focus setting defaults on for every new session');
+    await app.locator('#authorization').check(); await app.locator('#accept').check();
+    const followPromise = context.waitForEvent('page', { timeout: 10000 }); await app.locator('#start-cleanup').click();
+    let following;
+    try { following = await followPromise; }
+    catch (error) { console.error('Follow start diagnostics', JSON.stringify({notice:await app.locator('#notice').textContent(),session:await worker.evaluate(async ()=>(await chrome.storage.local.get('fmSession')).fmSession),dialog:await app.locator('#consent').textContent()})); throw error; }
+    await following.goto('https://x.com/fixture/followers'); await following.bringToFront(); await following.locator('#fm-resume').click();
+    await following.waitForFunction(() => window.fixtureFollows === 1, null, {timeout:18000});
+    await following.locator('.status').filter({hasText:'Follow-back selection processed'}).waitFor();
+    const followed = await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession);
+    assert.equal(followed.queue.length, 1); assert.equal(followed.queue[0].username, 'alice'); assert.equal(followed.results[0].outcome, 'confirmed');
+    assert.equal(await following.evaluate(() => window.fixtureClicks), 0);
+    check('verified-only follow back rechecks its badge and confirms a Following result for the exact account');
+
+    await app.bringToFront(); await app.locator('#follow-all').click(); await app.locator('#authorization').check(); await app.locator('#accept').check();
+    const allPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const all = await allPromise;
+    await all.goto('https://x.com/fixture/followers'); await all.bringToFront(); await all.locator('#fm-resume').waitFor();
+    await all.evaluate(() => { const button = document.querySelector('[data-testid="101-follow"]'); button.dataset.testid='101-unfollow'; button.textContent='Following'; });
+    await all.locator('#fm-resume').click(); await all.locator('.status').filter({hasText:'Follow-back selection processed'}).waitFor({timeout:27000});
+    const allResult = await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession);
+    assert.equal(allResult.results[0].outcome, 'skipped'); assert.equal(allResult.results[1].username, 'bruno'); assert.equal(allResult.results[1].outcome, 'confirmed');
+    assert.equal(await all.evaluate(() => window.fixtureFollows), 1); assert.equal(await all.evaluate(() => window.fixtureClicks), 0);
+    check('all-follower follow back includes unverified followers and skips accounts already followed at execution time');
     assert.deepEqual(errors, []); check('no page errors occur');
     console.log(`Screenshots: ${output}`);
   } finally { if (context) await context.close(); rmSync(temporary, { recursive: true, force: true }); }

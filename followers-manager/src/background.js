@@ -17,7 +17,7 @@ async function inject(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId); assertSessionUrl(s, tab.url);
     if (tab.status !== 'complete') return;
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['src/runner.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['src/dom.js', 'src/runner.js'] });
     await chrome.tabs.sendMessage(tabId, { type: 'fm:boot', id: s.id });
   } catch (error) {
     await serial(async () => { const current = await read(); if (current?.id === s.id && !TERMINAL.has(current.status)) await write({ ...current, status: 'paused', message: error.message }); });
@@ -35,7 +35,7 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       const s = makeSession(request);
       if (!await chrome.permissions.contains({ origins: ['https://x.com/*'] })) throw new Error('X site permission has not been granted.');
       const data = (await chrome.storage.local.get('fmData')).fmData;
-      if (s.queue.some((row) => isKept(row, data?.keepList))) throw new Error('A selected account is now on your keep list.');
+      if (['cleanup','follow'].includes(s.mode) && s.queue.some((row) => isKept(row, data?.keepList))) throw new Error('A selected account is now on your keep list.');
       const tab = await chrome.tabs.create({ url: `https://x.com${sessionPath(s)}`, active: true });
       s.tabId = tab.id; await write(s);
       // The update listener also covers pages that finish loading later.
@@ -60,10 +60,12 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       return write({ ...s, status: 'running', message: 'Running under your supervision.' });
     }
     if (request.type === 'fm:guard') {
-      if (!fromTab || s.status !== 'running' || !await focused(s)) throw new Error('Session paused or no longer visible.');
+      if (!fromTab || s.status !== 'running') throw new Error('Session paused or no longer visible.');
+      const isFocused = await focused(s); // Always verifies the owned tab and route, even in background mode.
+      if (s.pauseOnFocusLoss !== false && !isFocused) throw new Error('Session paused or no longer visible.');
       const data = (await chrome.storage.local.get('fmData')).fmData;
       const target = s.queue[s.index];
-      if (target && isKept(target, data?.keepList)) throw new Error('This account is now on your keep list.');
+      if (['cleanup','follow'].includes(s.mode) && target && isKept(target, data?.keepList)) throw new Error('This account is now on your keep list.');
       return s;
     }
     if (request.type === 'fm:update') {
@@ -95,7 +97,7 @@ chrome.tabs.onUpdated.addListener((tabId, change) => { if (change.status === 'co
 chrome.tabs.onRemoved.addListener((tabId) => { void serial(async () => { const s = await read(); if (s?.tabId === tabId && !TERMINAL.has(s.status)) await write({ ...s, status: 'stopped', message: 'Monitor tab closed. Session stopped.' }); }); });
 async function pauseIfAway() {
   await serial(async () => {
-    const s = await read(); if (!s || s.status !== 'running') return;
+    const s = await read(); if (!s || s.status !== 'running' || s.pauseOnFocusLoss === false) return;
     let active = false; try { active = await focused(s); } catch { /* Changed page or closed tab. */ }
     if (!active) await write({ ...s, status: 'paused', message: 'Paused because the monitor lost focus. Return and press Resume.' });
   });

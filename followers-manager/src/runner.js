@@ -1,6 +1,8 @@
 /* Runs only in a dedicated, extension-owned X tab. No cookies, private API, or request interception. */
 (() => {
   if (globalThis.__followersManager) return;
+  const readers = globalThis.FollowersManagerDOM;
+  if (!readers) throw new Error('Followers Manager page readers were not loaded. Reload the extension.');
   globalThis.__followersManager = true;
   let session, host, shadow, busy = false, version = 0, countdown = '', pending = false, localControl = '';
   const seen = new Map();
@@ -26,20 +28,20 @@
     `;
     shadow.append(style);
     const panel = el('section', null, 'monitor'); panel.setAttribute('aria-label', 'Followers Manager live monitor');
-    const header = el('header'); header.append(el('strong', 'Followers Manager'), el('span', session.mode === 'cleanup' ? 'Supervised unfollow session' : session.mode === 'scan' ? 'Follower / following scan' : 'Profile evidence inspection'));
+    const header = el('header'); header.append(el('strong', 'Followers Manager'), el('span', session.mode === 'follow' ? 'Supervised follow-back session' : session.mode === 'cleanup' ? 'Supervised unfollow session' : session.mode === 'scan' ? 'Follower / following scan' : 'Profile evidence inspection'));
     const main = el('main');
-    main.append(el('div', '', 'badge'), el('h2', 'Stay here. Stay in control.'), el('p', 'Keep this tab visible and focused. Watch continuously; use Pause or Stop whenever needed.'));
+    main.append(el('div', '', 'badge'), el('h2', 'Stay in control.'), el('p', session.pauseOnFocusLoss === false ? 'Focus pausing is OFF. This session may continue when hidden. Monitor progress and return to use Pause or Stop.' : 'Focus pausing is ON. Keep this tab visible and focused. Use Pause or Stop whenever needed.'));
     const current = el('div', null, 'current'); current.append(el('span', 'Current account', 'muted'), el('strong'), el('span', '', 'reason')); main.append(current);
     const progress = el('progress'); progress.max = Math.max(session.queue.length, 1); progress.value = 0; progress.setAttribute('aria-label', 'Session progress');
     main.append(progress, el('p', '', 'progress-text'), el('p', '', 'timer'));
     const status = el('p', '', 'status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); main.append(status);
-    main.append(el('p', session.mode === 'cleanup' ? 'You are responsible for these account actions. Monitoring and consent do not change X’s rules. X prohibits website scripting and automated unfollowing; restrictions or suspension remain possible.' : 'This session reads rendered pages. Lists can be partial; activity evidence can be unavailable. No unfollows occur in this mode.', 'risk'));
+    main.append(el('p', ['cleanup','follow'].includes(session.mode) ? 'You are responsible for these account actions. Monitoring and consent do not change X’s rules. X restricts website scripting and automated following/unfollowing; restrictions or suspension remain possible.' : 'This session reads rendered pages. Lists can be partial; activity evidence can be unavailable. No follow/unfollow actions occur in this mode.', 'risk'));
     main.append(el('p', 'Stop blocks further clicks. A request already submitted may still finish. Unfollows have no guaranteed undo.', 'muted'));
     main.append(el('div', '', 'log'));
     const footer = el('footer');
     const resume = el('button', 'Begin'); resume.id = 'fm-resume'; resume.addEventListener('click', async (event) => {
       if (!event.isTrusted || busy) return;
-      try { assertLocal(); localControl = ''; await message('resume'); void run(); } catch (error) { await pause(error.message); }
+      try { if (document.visibilityState !== 'visible' || !document.hasFocus()) throw new Error('Return to the focused monitor to begin or resume.'); assertLocal(); localControl = ''; await message('resume'); void run(); } catch (error) { await pause(error.message); }
     });
     const pauseButton = el('button', 'Pause', 'secondary'); pauseButton.id = 'fm-pause'; pauseButton.addEventListener('click', () => { void pause('Paused by you. Press Resume when ready.'); });
     const stop = el('button', 'Stop', 'stop'); stop.id = 'fm-stop'; stop.addEventListener('click', () => { void stopRun(); });
@@ -53,10 +55,10 @@
     shadow.querySelector('.current strong').textContent = current ? `@${current.username}` : session.mode === 'scan' ? `@${session.account}/${session.direction}` : 'Selection processed';
     shadow.querySelector('.reason').textContent = current?.reasons?.join(' · ') || (session.mode === 'scan' ? 'Collecting observed cards only; coverage needs your review.' : 'Your reviewed selection');
     shadow.querySelector('progress').value = session.mode === 'scan' ? 0 : session.index;
-    shadow.querySelector('.progress-text').textContent = session.mode === 'scan' ? `${Math.max(seen.size, session.records.length)} accounts collected` : `${session.index} of ${session.queue.length} processed · ${session.results.filter((r) => r.outcome === 'confirmed').length} confirmed unfollows`;
+    shadow.querySelector('.progress-text').textContent = session.mode === 'scan' ? `${Math.max(seen.size, session.records.length)} accounts collected` : `${session.index} of ${session.queue.length} processed · ${session.results.filter((r) => r.outcome === 'confirmed').length} confirmed ${session.mode === 'follow' ? 'follows' : 'unfollows'}`;
     shadow.querySelector('.status').textContent = session.message;
     shadow.querySelector('.timer').textContent = countdown || (pending ? 'An action was submitted; awaiting confirmation.' : '');
-    const resume = shadow.querySelector('#fm-resume'); resume.textContent = session.status === 'ready' ? (session.mode === 'cleanup' ? 'Begin supervised unfollow' : 'Begin reading') : 'Resume';
+    const resume = shadow.querySelector('#fm-resume'); resume.textContent = session.status === 'ready' ? (session.mode === 'follow' ? 'Begin supervised follow back' : session.mode === 'cleanup' ? 'Begin supervised unfollow' : 'Begin reading') : 'Resume';
     resume.disabled = session.status === 'running' || terminal.has(session.status) || busy;
     shadow.querySelector('#fm-pause').disabled = session.status !== 'running'; shadow.querySelector('#fm-stop').disabled = terminal.has(session.status);
     const log = shadow.querySelector('.log'); log.replaceChildren(...session.results.slice(-8).reverse().map((r) => el('p', `@${r.username}: ${r.outcome}${r.detail ? ` — ${r.detail}` : ''}`)));
@@ -67,12 +69,12 @@
     return accounts.size === 1 ? [...accounts][0] : '';
   }
   function assertLocal() {
-    if (document.visibilityState !== 'visible' || !document.hasFocus()) throw new Error('Paused: keep the monitor tab visible and focused.');
+    if (session.pauseOnFocusLoss !== false && (document.visibilityState !== 'visible' || !document.hasFocus())) throw new Error('Paused: keep the monitor tab visible and focused.');
     if (!host?.isConnected || !host.getClientRects().length) throw new Error('Monitor is no longer visible.');
     const bounds = host.getBoundingClientRect(), style = getComputedStyle(host);
     if (style.visibility !== 'visible' || Number(style.opacity) === 0 || bounds.width < 200 || bounds.height < 200 || bounds.top < 0 || bounds.bottom > innerHeight + 1) throw new Error('The monitor is obscured or outside the visible page.');
     if (signedInAccount() !== session.account) throw new Error('The signed-in account could not be verified or has changed. Stop and check the account shown in X.');
-    const expected = session.mode === 'inspect' ? `/${session.queue[session.index]?.username}` : `/${session.account}/${session.mode === 'scan' ? session.direction : 'following'}`;
+    const expected = session.mode === 'inspect' ? `/${session.queue[session.index]?.username}` : `/${session.account}/${session.mode === 'scan' ? session.direction : session.mode === 'follow' ? 'followers' : 'following'}`;
     if (location.origin !== 'https://x.com' || location.pathname.replace(/\/$/, '').toLowerCase() !== expected.toLowerCase()) throw new Error('The session page changed. Stop and start again from the dashboard.');
     if (document.querySelector('[data-testid="toast"]')?.textContent?.match(/limit|locked|suspend|try again|error/i) || document.querySelector('iframe[src*="captcha"], [data-testid="ocfEnterTextTextInput"]')) throw new Error('X displayed a restriction or verification request. Session paused.');
   }
@@ -99,16 +101,10 @@
   }
   function cells() { return [...document.querySelectorAll('[data-testid="UserCell"]')].filter((c) => !host.contains(c)); }
   function usernameOf(cell) {
-    const reserved = new Set(['home', 'explore', 'notifications', 'messages', 'settings', 'search', 'compose', 'i']);
-    const names = new Set([...cell.querySelectorAll('a[href]')].map((a) => pathHandle(a.href)).filter((s) => s && !reserved.has(s)));
-    return names.size === 1 ? [...names][0] : '';
+    return readers.usernameOf(cell);
   }
   function recordOf(cell) {
-    const username = usernameOf(cell); if (!username) return null;
-    const button = cell.querySelector('[data-testid$="-unfollow"], [data-testid$="-follow"]');
-    const id = button?.getAttribute('data-testid')?.match(/^(\d+)-(?:un)?follow$/)?.[1] || null;
-    const link = [...cell.querySelectorAll('a[href]')].find((a) => pathHandle(a.href) === username && a.textContent.trim() && !a.textContent.trim().startsWith('@'));
-    return { id, username, name: (link?.textContent.trim() || username).slice(0, 100), bio: (cell.querySelector('[data-testid="UserDescription"]')?.textContent || '').slice(0, 1000), observedAt: new Date().toISOString(), lastPostAt: null, protected: !!cell.querySelector('[data-testid="icon-lock"], [aria-label="Protected account"]') };
+    return readers.recordOf(cell, session.mode === 'scan' ? session.direction : session.mode === 'follow' ? 'followers' : 'following');
   }
   let confirmationFor = null;
   function ownedDialog() {
@@ -121,12 +117,12 @@
     const token = version;
     for (let left = session.delayMs / 1000; left > 0; left--) {
       await guard(); if (token !== version) throw new Error('Paused.');
-      countdown = `Unfollowing @${session.queue[session.index].username} in ${left}s`; render(); await wait(1000);
+      countdown = `${session.mode === 'follow' ? 'Following' : 'Unfollowing'} @${session.queue[session.index].username} in ${left}s`; render(); await wait(1000);
     }
     countdown = ''; await guard(); if (token !== version) throw new Error('Paused.');
   }
   async function findTarget(target) {
-    scrollTo(0, 0); let idle = 0, last = -1;
+    let idle = 0, last = -1, wrapped = false;
     const discovered = new Set();
     for (let pass = 0; pass < 180 && idle < 6; pass++) {
       await guard();
@@ -135,7 +131,8 @@
         if (name === target.username) return cell;
       }
       idle = discovered.size === last ? idle + 1 : 0; last = discovered.size;
-      countdown = `Finding @${target.username} in your following list…`; render(); scrollBy(0, 640); await wait(800);
+      countdown = `Finding @${target.username} in your ${session.mode === 'follow' ? 'followers' : 'following'} list…`; render(); scrollBy(0, 640); await wait(800);
+      if (idle >= 6 && !wrapped) { scrollTo(0, 0); idle = 0; last = -1; discovered.clear(); wrapped = true; }
     }
     throw new Error(`@${target.username} could not be located reliably. No action was taken; check the list and start a new selection.`);
   }
@@ -148,8 +145,8 @@
       const record = recordOf(cell);
       if (target.id && record.id !== target.id) throw new Error('The stable account ID could not be verified. No action taken.');
       if (record.protected) throw new Error('The account is now protected. No action taken.');
-      const reciprocalReason = target.reasons.some((r) => /No longer observed|Does not appear among/i.test(r));
-      if (reciprocalReason && cell.querySelector('[data-testid="userFollowIndicator"]')) {
+      const reciprocalReason = session.action === 'unfollow-nonfollowers' || target.reasons.some((r) => /No longer observed|Does not appear among/i.test(r));
+      if (reciprocalReason && readers.followsYou(cell)) {
         await message('update', { index: session.index, result: { outcome: 'skipped', detail: 'X now shows this account follows you. No unfollow submitted.' } });
         continue;
       }
@@ -180,6 +177,35 @@
     }
     if (session.status === 'running') await message('update', { status: 'complete', message: 'Selection processed. Review the confirmed results below.' });
   }
+  async function followBack() {
+    while (session.status === 'running' && session.index < session.queue.length) {
+      const target = session.queue[session.index]; await message('update', { current: target });
+      const cell = await findTarget(target); cell.scrollIntoView({ block: 'center' });
+      await countdownBeforeAction();
+      if (!cell.isConnected || usernameOf(cell) !== target.username) throw new Error('The target row changed. No follow submitted.');
+      const record = recordOf(cell);
+      if (target.id && record.id !== target.id) throw new Error('The account ID could not be verified. No follow submitted.');
+      if (record.protected || record.isFollowing || (target.requireVerified && !record.verified)) {
+        await message('update', { index: session.index, result: { outcome: 'skipped', detail: record.protected ? 'Private account excluded.' : record.isFollowing ? 'Already following.' : 'No verified badge currently observed.' } }); continue;
+      }
+      const button = cell.querySelector('[data-testid$="-follow"]');
+      if (!button || button.disabled || cell.querySelector('[data-testid$="-unfollow"]')) throw new Error('A unique Follow button could not be verified.');
+      if (document.querySelector('[data-testid="confirmationSheetConfirm"]')) throw new Error('Another confirmation is open. No follow submitted.');
+      await guard();
+      if (!cell.isConnected || usernameOf(cell) !== target.username || !cell.contains(button) || (target.requireVerified && !readers.verifiedOf(cell))) throw new Error('The target changed before the follow.');
+      const index = session.index; pending = true; render(); button.click();
+      let confirmed = false;
+      for (let n = 0; n < 60; n++) {
+        await wait(150);
+        const current = cells().find((c) => usernameOf(c) === target.username), following = current?.querySelector('[data-testid$="-unfollow"]');
+        if (following && (!target.id || following.getAttribute('data-testid') === `${target.id}-unfollow`)) { confirmed = true; break; }
+      }
+      pending = false;
+      await message('update', { index, result: { outcome: confirmed ? 'confirmed' : 'uncertain', detail: confirmed ? 'X now displays a Following button.' : 'No definitive follow result. Do not retry blindly.' } });
+      if (!confirmed) { await pause('Follow outcome uncertain. Check this account in X before another session.'); return; }
+    }
+    if (session.status === 'running') await message('update', { status: 'complete', message: 'Follow-back selection processed. Review the results below.' });
+  }
   async function scan() {
     session.records.forEach((r) => seen.set(r.username, r));
     let idle = 0, last = -1;
@@ -201,7 +227,8 @@
     const dates = [...document.querySelectorAll('article[data-testid="tweet"]')].filter((article) =>
       !article.querySelector('[data-testid="socialContext"]') && [...article.querySelectorAll('a[href]')].some((a) => new RegExp(`^/${target.username}/status/`, 'i').test(new URL(a.href, location.href).pathname))
     ).map((a) => a.querySelector('time')?.dateTime).filter((d) => d && Number.isFinite(Date.parse(d))).sort((a, b) => Date.parse(b) - Date.parse(a));
-    const profile = { username: target.username, id: target.id, bio: (document.querySelector('[data-testid="UserDescription"]')?.textContent || '').slice(0, 1000), lastPostAt: dates[0] || null, observedAt: new Date().toISOString() };
+    const bioNode = document.querySelector('[data-testid="UserDescription"]');
+    const profile = { username: target.username, id: target.id, bio: (bioNode?.textContent || '').slice(0, 1000), bioObserved: !!bioNode, lastPostAt: dates[0] || null, observedAt: new Date().toISOString() };
     await guard();
     await message('update', { index: session.index, result: { outcome: 'observed', detail: dates.length ? 'Latest public post in the rendered timeline sample; review before acting.' : 'No public post evidence available; inactivity is unknown.', profile } });
     await message('next-profile');
@@ -209,7 +236,7 @@
   async function run() {
     if (busy || session.status !== 'running') return;
     busy = true; render();
-    try { if (session.mode === 'cleanup') await cleanup(); else if (session.mode === 'scan') await scan(); else await inspect(); }
+    try { if (session.mode === 'cleanup') await cleanup(); else if (session.mode === 'follow') await followBack(); else if (session.mode === 'scan') await scan(); else await inspect(); }
     catch (error) { await pause(error.message); }
     finally { busy = false; countdown = ''; render(); }
   }
@@ -229,8 +256,8 @@
     if (next.status !== 'running' && session.status === 'running') version++;
     session = localControl && !terminal.has(next.status) ? { ...next, status: localControl } : next; render();
   });
-  document.addEventListener('visibilitychange', () => { if (session?.status === 'running' && document.visibilityState !== 'visible') void pause('Monitor hidden. Return to this tab and press Resume.'); });
-  window.addEventListener('blur', () => { if (session?.status === 'running') void pause('Monitor lost focus. Return and press Resume.'); });
+  document.addEventListener('visibilitychange', () => { if (session?.status === 'running' && session.pauseOnFocusLoss !== false && document.visibilityState !== 'visible') void pause('Monitor hidden. Return to this tab and press Resume.'); });
+  window.addEventListener('blur', () => { if (session?.status === 'running' && session.pauseOnFocusLoss !== false) void pause('Monitor lost focus. Return and press Resume.'); });
   // A removed monitor or changed account must stop progress even during a countdown.
   setInterval(() => { if (session?.status === 'running') { try { assertLocal(); } catch (error) { void pause(error.message); } } }, 500);
 })();

@@ -1,7 +1,8 @@
-import { normalizeHandle, normalizeSnapshot, parseImport, compareSnapshots, buildReview, exportCsv, DEMO_SNAPSHOTS } from './core.js';
+import { normalizeHandle, normalizeSnapshot, parseImport, compareSnapshots, buildReview, buildActionQueue, exportCsv, DEMO_SNAPSHOTS } from './core.js';
 import { MAX_QUEUE, isKept } from './session.js';
 const $ = (id) => document.getElementById(id);
 const cleanData = () => ({ version: 1, snapshots: [], keepList: [] });
+const actionIds = ['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-all'];
 let data = cleanData(), session = null, rows = [], selected = new Set(), demo = false, currentAccount = '', prepared = null;
 const text = (tag, value, cls) => { const node = document.createElement(tag); node.textContent = value; if (cls) node.className = cls; return node; };
 const date = (value) => new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -34,6 +35,8 @@ function render() {
   $('coverage-info').textContent = current ? `Latest observation: ${date(current.observedAt)}. Source: ${current.source}. Coverage: ${current.coverage}. ${current.followers.length} follower records; ${current.following.length} following records.` : 'A first snapshot establishes your baseline. Later complete snapshots can reveal relationship changes.';
   $('comparison-warning').textContent = comparison?.warning || (!before ? 'Tracking starts with your first baseline. Import or scan a later observation to see changes.' : '');
   renderChart(points); renderRows(); renderSnapshots(); renderSession();
+  updateSessionButtons();
+  $('action-summary').textContent = current ? `${current.followers.length} observed followers; ${current.following.length} observed following. Coverage: ${current.coverage}. Verification and relationship checks are repeated on X before each action.` : 'Scan or import your lists to prepare an action selection.';
 }
 function renderChart(points) {
   const window = Number($('window').value), cutoff = window ? Date.now() - window * 86400000 : 0;
@@ -57,7 +60,7 @@ function visibleRows() {
   return rows.filter((row) => {
     const matches = filter === 'all' || (filter === 'kept' && isKept(row, data.keepList)) || (filter === 'lost' && row.kind === 'lost') ||
       (filter === 'inactive' && row.reasons.some((r) => r.startsWith('No public post observed'))) ||
-      (filter === 'nonfollower' && row.reasons.some((r) => r.startsWith('Does not appear among'))) ||
+      (filter === 'nonfollower' && row.reasons.some((r) => r.startsWith('Does not appear'))) ||
       (filter === 'review' && row.reasons.some((r) => r.startsWith('No bio is available')));
     return matches && `${row.username} ${row.name}`.toLowerCase().includes(query);
   });
@@ -70,6 +73,7 @@ function renderRows() {
     if (checkbox.disabled) { selected.delete(row.username); checkbox.checked = false; }
     checkbox.addEventListener('change', () => { if (checkbox.checked) selected.add(row.username); else selected.delete(row.username); renderSelection(); }); selectCell.append(checkbox);
     const accountCell = document.createElement('td'), link = text('a', row.name || row.username, 'person-name'); link.href = `https://x.com/${row.username}`; link.target = '_blank'; link.rel = 'noopener noreferrer'; accountCell.append(link, text('span', `@${row.username}`, 'handle'));
+    if (row.bio) accountCell.append(text('span', row.bio, 'bio'));
     const evidence = document.createElement('td'); evidence.append(...(row.reasons.length ? row.reasons : ['No cleanup suggestion.']).map((reason) => text('span', reason, 'reason')));
     const keepCell = document.createElement('td'), keep = text('button', isKept(row, data.keepList) ? 'Kept' : 'Keep', 'secondary keep-button'); keep.setAttribute('aria-label', `${isKept(row, data.keepList) ? 'Unprotect' : 'Protect'} @${row.username}`); keep.setAttribute('aria-pressed', String(isKept(row, data.keepList)));
     keep.addEventListener('click', attempt(async () => { if (isKept(row, data.keepList)) data.keepList = data.keepList.filter((item) => !isKept(row, [item])); else data.keepList.push({ id: row.id, username: row.username }); selected.delete(row.username); await persist(); render(); })); keepCell.append(keep);
@@ -84,6 +88,7 @@ function renderSelection() {
   $('cleanup-label').textContent = selected.size ? `${selected.size} accounts in your review selection.` : 'Build a review selection first.';
   $('review-cleanup').disabled = !selected.size || selected.size > MAX_QUEUE || demo;
   $('inspect').disabled = !selected.size || selected.size > MAX_QUEUE || demo;
+  updateSessionButtons();
 }
 function renderSnapshots() {
   $('snapshots').replaceChildren(...snapshots().slice().reverse().map((s) => {
@@ -102,6 +107,7 @@ function renderSnapshots() {
 }
 function renderSession() {
   $('session').hidden = !session || demo;
+  updateSessionButtons();
   if (!session || demo) return;
   $('session-title').textContent = `${session.mode} · ${session.status} · @${session.account}`;
   $('session-info').textContent = `${session.mode === 'scan' ? `${session.records.length} observed accounts` : `${session.index}/${session.queue.length} processed`} — ${session.message}`;
@@ -109,21 +115,45 @@ function renderSession() {
   $('save-scan').hidden = session.mode !== 'scan' || !session.records.length || session.status === 'running';
   $('session-log').replaceChildren(...session.results.map((r) => text('p', `${date(r.at)} · @${r.username}: ${r.outcome} — ${r.detail}`)));
 }
+function updateSessionButtons() {
+  const busy = session && !['complete', 'stopped', 'error'].includes(session.status);
+  for (const id of actionIds) $(id).disabled = !!busy || demo || !latest();
+  for (const id of ['scan-followers', 'scan-following']) $(id).disabled = !!busy || demo;
+  for (const id of ['inspect', 'review-cleanup']) $(id).disabled = !!busy || demo || !selected.size || selected.size > MAX_QUEUE;
+}
 function download(name, content, type) { const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function queue() { return rows.filter((r) => selected.has(r.username) && r.canSelect && !isKept(r, data.keepList)); }
-async function start(mode, direction) {
+async function start(mode, direction, plan = prepared) {
   const own = account();
   if (currentAccount && currentAccount !== own) throw new Error('Switch the displayed account before starting a live session.');
-  await command('start', { mode, account: own, direction, queue: mode === 'scan' ? [] : queue(), consent: mode === 'cleanup', authorization: 'written-permission' });
+  if (plan?.account && plan.account !== own) throw new Error('The account changed after you reviewed this selection. Review it again.');
+  await command('start', { mode, account: own, direction, queue: mode === 'scan' ? [] : plan?.queue || queue(), action: plan?.action || null,
+    pauseOnFocusLoss: $('pause-focus').checked, consent: ['cleanup', 'follow'].includes(mode), authorization: 'written-permission' });
 }
-function prepareStart(mode, direction) {
-  account(); prepared = { mode, direction };
+function prepareStart(mode, direction, action = null) {
+  if (session && !['complete', 'stopped', 'error'].includes(session.status)) throw new Error('Finish or Stop the current session before preparing another one.');
+  const own = account();
+  if (currentAccount && own !== currentAccount) throw new Error('Switch the displayed account before reviewing an action.');
+  let selection = mode === 'scan' ? [] : queue(), warning = '';
+  if (action) {
+    if (!latest()) throw new Error('Scan or import your lists first.');
+    const result = buildActionQueue(latest(), action, data.keepList); selection = result.queue; warning = `${result.excluded} excluded. ${result.warning}`;
+  }
+  if (mode !== 'scan' && !selection.length) throw new Error(`No eligible accounts for this action. ${warning}`);
+  prepared = { mode, direction, action, account: own, queue: structuredClone(selection) };
   $('accept').checked = false; $('authorization').checked = false;
-  $('consent-title').textContent = mode === 'cleanup' ? 'Supervise this cleanup' : mode === 'scan' ? 'Supervise this scan' : 'Supervise profile inspection';
-  $('consent-description').textContent = mode === 'cleanup' ? 'The extension will click Unfollow for this fixed selection, one at a time. Watch continuously and keep the X tab visible and focused.' : 'The extension will read rendered X pages. Watch continuously and keep the X tab visible and focused. This session will not unfollow anyone.';
-  $('consent-list').replaceChildren(...(mode === 'scan' ? [] : queue().map((r) => text('li', `@${r.username} — ${r.reasons.join('; ') || 'Selected by you'}`))));
+  $('pause-focus').checked = true; updateFocusNote();
+  $('consent-title').textContent = mode === 'follow' ? 'Review follow-back selection' : mode === 'cleanup' ? 'Review unfollow selection' : mode === 'scan' ? 'Supervise this scan' : 'Supervise profile inspection';
+  $('consent-description').textContent = ['cleanup','follow'].includes(mode) ? `The extension will ${mode === 'follow' ? 'follow back' : 'unfollow'} ${selection.length} selected accounts, one at a time. Review this fixed selection and monitor its progress.` : 'The extension will read rendered X pages. This session will not follow or unfollow anyone.';
+  $('consent-coverage').textContent = warning;
+  $('consent-list').replaceChildren(...selection.slice(0, 500).map((r) => text('li', `@${r.username} — ${r.reasons?.join('; ') || 'Selected by you'}`)));
+  if (selection.length > 500) $('consent-list').append(text('li', `${selection.length - 500} more accounts in this fixed selection. Export review data or narrow your selection to inspect individuals.`));
   $('consent').showModal();
 }
+function updateFocusNote() { $('focus-note').textContent = $('pause-focus').checked ? 'Switching tabs or windows pauses this session. Return to the monitor and press Resume to continue.' : 'This session can continue in a background tab. Keep monitoring its progress and return to use Pause or Stop. Browsers may slow down background work; this is not a guarantee of continuous execution.'; }
+$('pause-focus').addEventListener('change', updateFocusNote);
+$('export-action').addEventListener('click', attempt(() => { if (prepared?.queue) download('action-selection.csv', exportCsv(prepared.queue), 'text/csv'); }));
+for (const action of ['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-all']) $(action).addEventListener('click', attempt(() => prepareStart(action.startsWith('follow-') ? 'follow' : 'cleanup', undefined, action)));
 function saveScan() {
   $('scan-save').hidden = false; $('coverage').checked = false; $('reported-count').value = '';
   $('scan-summary').textContent = `${session.records.length} ${session.direction} records observed for @${session.account}. Scrolling stopping is not proof of completeness. An unchecked snapshot is saved as partial.`;
@@ -144,9 +174,13 @@ $('clear-selection').addEventListener('click', () => { selected.clear(); renderR
 $('review-cleanup').addEventListener('click', attempt(() => prepareStart('cleanup')));
 $('start-cleanup').addEventListener('click', attempt(async () => {
   if (!$('consent').querySelector('form').reportValidity() || !prepared) return;
-  const granted = await chrome.permissions.request({ origins: ['https://x.com/*'] });
-  if (!granted) throw new Error('X site permission was declined. Offline history remains available.');
-  const next = prepared; $('consent').close(); await start(next.mode, next.direction);
+  $('start-cleanup').disabled = true;
+  try {
+    const granted = await chrome.permissions.request({ origins: ['https://x.com/*'] });
+    if (!granted) throw new Error('X site permission was declined. Offline history remains available.');
+    const next = prepared; $('consent').close(); await start(next.mode, next.direction, next);
+    announce('Session opened. Check its live monitor and press Begin when ready.');
+  } finally { $('start-cleanup').disabled = false; }
 }));
 $('show-session').addEventListener('click', attempt(() => command('show')));
 $('pause-session').addEventListener('click', attempt(() => command('pause')));

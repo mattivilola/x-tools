@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildReview,
+  buildActionQueue,
   compareSnapshots,
   DEMO_SNAPSHOTS,
   exportCsv,
@@ -185,6 +186,157 @@ test('review labels inactivity only from fresh known activity and respects stabl
   assert.equal(byUsername.get('privateuser').reasons.some((reason) => reason.startsWith('No public post observed')), false);
 });
 
+test('normalization preserves evidence markers and distinguishes an uncollected bio from a known empty bio', () => {
+  const legacy = snapshot({
+    coverage: 'partial',
+    followers: [
+      { id: 'legacy-empty', username: 'legacyempty', bio: '' },
+      { id: 'legacy-known', username: 'legacyknown', bio: 'A known synthetic bio' },
+    ],
+    following: [],
+  });
+  assert.equal(legacy.followers[0].bioObserved, false);
+  assert.equal(legacy.followers[0].verified, null);
+  assert.equal(legacy.followers[0].followsYou, null);
+  assert.equal(legacy.followers[0].isFollowing, null);
+  assert.equal(legacy.followers[1].bioObserved, true);
+
+  const imported = parseImport(JSON.stringify([{
+    id: 'explicit-evidence',
+    username: 'EvidenceUser',
+    bio: '',
+    bioObserved: true,
+    verified: false,
+    followsYou: false,
+    isFollowing: false,
+  }]), account, 'followers', afterAt);
+  assert.equal(imported.followers[0].username, 'evidenceuser');
+  assert.equal(imported.followers[0].bioObserved, true);
+  assert.equal(imported.followers[0].verified, false);
+  assert.equal(imported.followers[0].followsYou, false);
+  assert.equal(imported.followers[0].isFollowing, false);
+  assert.throws(() => snapshot({ followers: [member('bad-bio-marker', 'badmarker', { bioObserved: null })] }), /bioObserved must be a boolean/);
+  assert.throws(() => snapshot({ followers: [member('bad-verified', 'badverified', { verified: 'yes' })] }), /verified must be a boolean or null/);
+
+  const reviewInput = snapshot({
+    followers: [member('unknown-bio-id', 'unknownbio'), member('known-empty-id', 'knownempty')],
+    following: [
+      member('unknown-bio-id', 'unknownbio', { bio: '', bioObserved: false }),
+      member('known-empty-id', 'knownempty', { bio: '', bioObserved: true }),
+    ],
+  });
+  const rows = new Map(buildReview(reviewInput).map((row) => [row.username, row]));
+  assert.equal(rows.get('unknownbio').reasons.includes('Bio not collected; scan again or inspect this profile.'), true);
+  assert.equal(rows.get('unknownbio').reasons.some((reason) => reason.includes('weak profile signal')), false);
+  assert.equal(rows.get('knownempty').reasons.some((reason) => reason.includes('weak profile signal')), true);
+});
+
+test('follow queues require explicit verification when requested and exclude self, kept, private, duplicate, and already-followed accounts', () => {
+  const input = snapshot({
+    coverage: 'partial',
+    followers: [
+      member('self-id', account, { verified: true, isFollowing: false }),
+      member('private-id', 'privateuser', { verified: true, protected: true }),
+      member('kept-id', 'renamedkeep', { verified: true }),
+      member('kept-handle-id', 'keepme', { verified: true }),
+      member('already-id', 'alreadyid', { verified: true, isFollowing: false }),
+      member('already-handle-id', 'alreadyhandle', { verified: true, isFollowing: false }),
+      member('explicit-following-id', 'alreadyexplicit', { verified: true, isFollowing: true }),
+      member('verified-good-id', 'verifiedgood', { verified: true, isFollowing: false }),
+      member('ordinary-good-id', 'ordinarygood', { verified: false, isFollowing: false }),
+      member('unknown-verification-id', 'unknownverified', { verified: null, isFollowing: false }),
+      member('id-only-follow', '', { verified: true }),
+      member('duplicate-one', 'duplicateuser', { verified: false }),
+      member('duplicate-two', 'duplicateuser', { verified: true }),
+    ],
+    following: [
+      member('already-id', 'renamedalready'),
+      member(null, 'alreadyhandle'),
+    ],
+  });
+  const keepList = [{ id: 'kept-id', username: 'oldkeepname' }, '@keepme'];
+
+  const all = buildActionQueue(input, 'follow-all', keepList);
+  assert.deepEqual(all.queue.map((row) => row.username), ['verifiedgood', 'ordinarygood', 'unknownverified']);
+  assert.equal(all.excluded, 10);
+  assert.match(all.warning, /only observed records/);
+  assert.equal(Array.isArray(all.queue[0].reasons), true);
+
+  const verified = buildActionQueue(input, 'follow-verified', keepList);
+  assert.deepEqual(verified.queue.map((row) => row.username), ['verifiedgood']);
+  assert.equal(verified.excluded, 12);
+  assert.match(verified.queue[0].reasons[0], /Explicit profile evidence marks this follower as verified/);
+  assert.throws(() => buildActionQueue(input, 'follow-everyone'), /Unknown action queue type/);
+});
+
+test('unfollow queues protect kept, private, and self accounts, and use only fresh or complete compatible nonfollower evidence', () => {
+  const freshAt = '2026-11-02T12:00:00.000Z';
+  const staleAt = '2026-10-25T12:00:00.000Z';
+  const now = Date.parse('2026-11-03T12:00:00.000Z');
+  const complete = snapshot({
+    observedAt: freshAt,
+    followers: [
+      member('stale-present-id', 'staleuser', { observedAt: freshAt }),
+      member('unknown-present-id', 'unknownpresent', { observedAt: freshAt }),
+      member('rename-id', 'oldrename', { observedAt: freshAt }),
+    ],
+    following: [
+      member('self-id', account),
+      member('private-id', 'privateuser', { protected: true }),
+      member('kept-id', 'renamedkeep'),
+      member('kept-handle-id', 'keepme'),
+      member('fresh-false-id', 'freshfalse', { followsYou: false, observedAt: freshAt }),
+      member('explicit-true-id', 'explicittrue', { followsYou: true, observedAt: staleAt }),
+      member('stale-present-id', 'staleuser', { followsYou: false, observedAt: staleAt }),
+      member('unknown-absent-id', 'unknownabsent', { followsYou: null, observedAt: freshAt }),
+      member('unknown-present-id', 'unknownpresent', { followsYou: null, observedAt: freshAt }),
+      member('rename-id', 'newrename', { followsYou: null, observedAt: freshAt }),
+    ],
+  });
+  const keepList = [{ id: 'kept-id', username: 'oldkeep' }, 'keepme'];
+
+  const nonfollowers = buildActionQueue(complete, 'unfollow-nonfollowers', keepList, now);
+  assert.deepEqual(nonfollowers.queue.map((row) => row.username), ['freshfalse', 'unknownabsent']);
+  assert.equal(nonfollowers.excluded, 8);
+  assert.match(nonfollowers.queue[0].reasons[0], /Fresh profile evidence explicitly says/);
+  assert.match(nonfollowers.queue[1].reasons[0], /complete follower set/);
+  assert.equal(nonfollowers.warning, '');
+
+  const all = buildActionQueue(complete, 'unfollow-all', keepList, now);
+  assert.deepEqual(all.queue.map((row) => row.username), [
+    'freshfalse', 'explicittrue', 'staleuser', 'unknownabsent', 'unknownpresent', 'newrename',
+  ]);
+  assert.equal(all.excluded, 4);
+
+  const partial = snapshot({
+    observedAt: freshAt,
+    coverage: 'partial',
+    followers: [],
+    following: [
+      member('partial-fresh-id', 'partialfresh', { followsYou: false, observedAt: freshAt }),
+      member('partial-stale-id', 'partialstale', { followsYou: false, observedAt: staleAt }),
+      member('partial-unknown-id', 'partialunknown', { followsYou: null, observedAt: freshAt }),
+      member('partial-true-id', 'partialtrue', { followsYou: true, observedAt: staleAt }),
+    ],
+  });
+  const partialQueue = buildActionQueue(partial, 'unfollow-nonfollowers', [], now);
+  assert.deepEqual(partialQueue.queue.map((row) => row.username), ['partialfresh']);
+  assert.equal(partialQueue.excluded, 3);
+  assert.match(partialQueue.warning, /only observed records/);
+
+  const mixed = snapshot({
+    observedAt: freshAt,
+    followers: [member(null, 'handlefollower')],
+    following: [
+      member('mixed-id', 'notprovable', { followsYou: null, observedAt: freshAt }),
+      member('fresh-mixed-id', 'freshmixed', { followsYou: false, observedAt: freshAt }),
+    ],
+  });
+  const mixedQueue = buildActionQueue(mixed, 'unfollow-nonfollowers', [], now);
+  assert.deepEqual(mixedQueue.queue.map((row) => row.username), ['freshmixed']);
+  assert.match(mixedQueue.warning, /identities are mixed or incompatible/);
+});
+
 test('review gates nonfollower labels on complete identity-compatible data and labels comparable losses cautiously', () => {
   const previous = snapshot({
     followers: [member('lost-id', 'lostuser'), member('mutual-id', 'mutualuser')],
@@ -232,6 +384,9 @@ test('synthetic demo snapshots show gains, losses, inactive and sparse review ro
   assert.equal(comparison.comparable, true);
   assert.equal(comparison.gained.length, 2);
   assert.equal(comparison.lost.length, 2);
+  assert.equal(DEMO_SNAPSHOTS[1].followers.find((row) => row.username === 'demoalpha').verified, true);
+  assert.equal(DEMO_SNAPSHOTS[1].following.find((row) => row.username === 'demogoneone').followsYou, false);
+  assert.equal(DEMO_SNAPSHOTS[1].following.find((row) => row.username === 'demosparse').bioObserved, true);
   const review = buildReview(DEMO_SNAPSHOTS[1], DEMO_SNAPSHOTS[0], [], Date.now());
   assert.equal(review.some((row) => row.kind === 'lost'), true);
   assert.equal(review.some((row) => row.kind === 'inactive'), true);

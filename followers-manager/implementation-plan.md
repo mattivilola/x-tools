@@ -1,6 +1,6 @@
 # Implementation status and limits
 
-Updated 2026-10-26. The earlier brainstorm is now implemented as the **Followers Manager browser extension**, version 0.1.0. An API edition is a separate proposed tool, [api-followers-management](../api-followers-management/README.md).
+Updated 2026-11-03. The earlier brainstorm is now implemented as the **Followers Manager browser extension**, version 0.2.0. An API edition is a separate proposed tool, [api-followers-management](../api-followers-management/README.md).
 
 ## Implemented modules
 
@@ -14,11 +14,11 @@ Local storage uses `chrome.storage.local`, with `fmData` for history/keep list a
 
 ## Session contract
 
-The dashboard freezes up to 30 selected accounts. Start requires written-authorization attestation, responsibility/monitoring consent, and site permission. The X overlay initially waits for Begin. The runner verifies the signed-in account from X's profile navigation, the exact route, visible/focused state, current queue index and latest keep decisions.
+The dashboard freezes up to 10,000 observed selected accounts. Start requires written-authorization attestation, responsibility/monitoring consent, and site permission. The X overlay initially waits for Begin. The runner verifies the signed-in account from X's profile navigation, the exact route, the session focus setting, current queue index and latest keep decisions.
 
 Before an unfollow, it finds the exact user card, displays an eight-second countdown, rechecks the identity and dialog target, and only then confirms. A same-account rendered Follow button is evidence of success. A disappeared card or timed-out response is uncertain, halts further work and is not blindly retried. Already submitted outcomes may be reconciled after Stop without continuing the selection.
 
-Focus loss, hidden/removed overlay, page/account change or detected restrictions pause further actions. Pause and Stop cannot undo a request that has already been submitted. A browser restart or cleanup-page reload cannot silently continue destructive work. The controls cannot prove human presence or grant an exception to X's rules.
+Focus loss pauses by default. The explicit per-session toggle can permit background continuation; hidden/removed overlay, page/account change and detected restrictions still pause where detectable. Start and Resume always require a focused monitor. Pause and Stop cannot undo a request that has already been submitted. A browser restart or cleanup-page reload cannot silently continue destructive work. The controls cannot prove human presence or grant an exception to X's rules.
 
 ## Data integrity
 
@@ -38,8 +38,14 @@ Verified on 2026-10-26: 19 Followers Manager Node tests, root checks and both ex
 
 - DOM test IDs and English restriction/confirmation presentation may change; unsupported pages pause instead of trying alternative click strategies.
 - Browser scans cannot independently prove full-list coverage. Snapshot timestamps describe observations, not an atomic provider transaction or exact unfollow event time.
-- No always-on detection, notification service, auto-follow, DMs, block/mute actions or unattended reciprocal-unfollow daemon.
+- No always-on detection, notification service, DMs, block/mute actions or unattended reciprocal-unfollow daemon. Follow-backs operate only on a reviewed, fixed selection.
 - No calibrated bot classifier, reliable social-graph manipulation detector or guarantee that a timeline sample includes the latest post.
 - Storage is bounded, can hit browser quota, and requires regular exports. Only the latest session state/log is retained separately from history backups.
 - More archive schemas/multipart imports and finer direction-specific snapshot provenance can be added as fixtures become available.
 - API entitlement, OAuth, API pricing and permitted action use cases are research for the separate API tool; the website runner is not its fallback.
+
+## Version 0.2 changes
+
+Rendered-card readers now support bio layouts without UserDescription and keep unknown legacy bios distinct from confirmed empty bios. New observed verification/relationship metadata supports four action queues with complete-coverage/freshness rules. Follow-back execution verifies the current row/badge/button and rendered result. The focus toggle defaults on but permits background continuation when explicitly disabled. Existing history and keep lists are preserved. See README for the exact workflows.
+
+Verified on 2026-11-03: 24 Followers Manager Node tests, root checks and both package builds passed. The integrated isolated Edge fixture suite passed realistic bio/mention parsing, verified/reciprocity metadata, both unfollow shortcut selections, background scan completion with focus pausing disabled, verified-only follow-back, all-follower follow-back with already-followed skips, Pause/Stop, mismatched confirmation refusal and persistence. Session handoff now disables new action starts until the previous job finishes or is stopped, and prevents duplicate Start submissions. No live X follow/unfollow actions were used for these checks.

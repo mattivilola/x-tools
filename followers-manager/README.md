@@ -2,7 +2,7 @@
 
 **Understand your audience. Keep a following list you actually want.**
 
-A local-first Chromium extension for follower history, relationship changes and **continuously supervised unfollow sessions**. Initial implementation: **v0.1.0**.
+A local-first Chromium extension for follower history, relationship changes and **reviewed follow-back and unfollow sessions**. Version: **v0.2.0**.
 
 **Made by [Matti Vilola](https://github.com/mattivilola) with ❤️, sponsored and distributed by [ILO Applications SL](https://iloapps.com).**
 
@@ -16,7 +16,7 @@ A local-first Chromium extension for follower history, relationship changes and 
 - Protects your keep list and excludes protected/private accounts from action selection. Stable IDs protect renamed accounts when the source supplies them.
 - Reads followers/following pages and inspects selected public profiles in a dedicated X tab, using the rendered page and your existing signed-in session.
 - Runs a fixed, reviewed selection through a **large live overlay** that shows the current handle, reasons, countdown, processed/total progress and confirmed or uncertain results.
-- Provides **Pause, Resume and Stop**, automatically pauses when the tab/window loses focus, and requires a visible on-page Begin before a session starts.
+- Provides **Pause, Resume and Stop**, a per-session **Pause if losing focus** toggle (on by default), and a focused on-page Begin before a session starts.
 - Imports JSON and supported extracted X archive files; exports a backup and a spreadsheet-safe review CSV. Synthetic demo mode makes no X requests.
 
 No backend, API key, OAuth connection, cloud analytics, cookie extraction or undocumented API access is used. The future API edition is a separate proposed tool: [API Followers Management](../api-followers-management/README.md).
@@ -27,7 +27,7 @@ No backend, API key, OAuth connection, cloud analytics, cookie extraction or und
 
 Under this repository's access policy, live website operation is for operators with X's express written authorization covering the intended collection/actions and data use. Each live session requires that attestation, explicit monitoring/responsibility consent and an optional X site-permission grant. The extension records the attestation; it cannot verify the agreement. Do not tick it unless it is true. Offline demo/import analysis remains available without a site grant.
 
-**The user is responsible for the account actions and must monitor continuously for the entire session.** The software cannot prove a person is present. Never leave an active session unattended. Pause before stepping away; Stop when finished.
+**The user is responsible for the session and its account actions and must monitor progress.** The software cannot prove a person is present. Focus pausing is enabled by default. Explicitly turning it off permits work to continue when the monitor is hidden; use Pause before stepping away and Stop when finished. The toggle does not make otherwise restricted automation permitted.
 
 ## Install
 
@@ -44,23 +44,38 @@ The installed extension and toolbar use the retro pixel-art **X / FM** icon (FM 
 
 1. Leave demo mode and enter the exact handle of your signed-in X account.
 2. Choose **Scan followers**. Read the notice, attest to the required authorization, accept continuous supervision, and grant X site access if you intend to proceed.
-3. In the new X tab, check the account and overlay, then choose **Begin reading**. Keep this tab visible and focused while the scan scrolls through rendered user cards.
+3. In the new X tab, check the account and overlay, then choose **Begin reading**. Keep this tab visible and focused while the scan scrolls, or explicitly turn off **Pause if losing focus** in the start dialog to permit background continuation. Start and Resume always require a focused monitor.
 4. After collection stops, return to the dashboard and choose **Save scan**. Enter an exact total from X if known. Leave coverage unchecked unless you independently verified the full list. No more loaded cards does not establish completeness.
 5. Repeat for **Scan following**. Opposite-direction browser observations within 30 minutes can be paired. They become complete only when you explicitly verified both lists; concurrent relationship changes can still make the combined observation inconsistent.
 6. Repeat later to see count progress and compare relationships. In the saved-snapshots section, **Confirm full coverage** is available for paired partial data after you independently verify both lists.
 
-A first snapshot establishes a baseline; it cannot reveal earlier unfollowers. Partial data can support a review selection but cannot establish missing followers or non-reciprocity. Handle-only comparisons are approximate because handles can change. Mixed ID/handle formats are conservatively excluded from comparisons.
+A first snapshot establishes a baseline; it cannot reveal earlier unfollowers. Partial data cannot establish missing followers from absence. Fresh relationship badges observed directly in following cards can support nonfollower suggestions; missing or stale relationship evidence remains unknown. Handle-only comparisons are approximate because handles can change. Mixed ID/handle formats are conservatively excluded from comparisons.
 
 Counts shown on the chart are reported or explicitly confirmed totals, not partial collection lengths. Missing days are not invented measurements. The net change uses the displayed observation endpoints, not an exact 30/90-day claim when measurements are missing. Current storage bounds are 100 snapshots and 10,000 members per direction; export backups regularly. Browser storage quota can be reached sooner with rich records.
+
+## Follow-back and unfollow shortcuts
+
+The **Account actions** panel prepares these fixed selections, then opens the review/consent dialog:
+
+- **Follow back all verified followers:** observed followers with a real verified-badge observation; already-followed accounts are excluded. The badge and current button are checked again before following.
+- **Follow back all followers:** observed followers you are not already following. A current Following button causes a skip.
+- **Unfollow non-followers:** accounts in your following list with fresh explicit non-reciprocity evidence, or absence from a comparable complete follower list. Unknown membership from partial data is excluded. A current Follows you indicator causes a skip.
+- **Unfollow all following:** the eligible accounts in your observed following list, including mutuals. Keep-list and known private-account protections still apply.
+
+“All” refers to the saved observed records, not a guarantee that every account on X has been discovered. Legacy scans have unknown verification and relationship fields; rescan before using badge-based shortcuts. The dialog shows the selection count and first 500 targets; **Export selection CSV** contains the full fixed selection. No action starts until consent and the focused monitor's **Begin**. A follow succeeds only when X renders the matching Following button. Unknown results pause instead of retrying.
+
+### Pause if losing focus
+
+This toggle appears in every start dialog, including both scans. It resets to **on** for each new session. On: losing tab/window focus or visibility pauses and requires Resume. Off: scans, inspections and selected follow/unfollow execution may continue when hidden. Account/route, keep-list, overlay-presence, restriction and Stop checks still apply. Browser suspension/throttling can delay or interrupt background work; this is not a scheduling service. Keep monitoring progress and remain responsible for the session.
 
 ## The supervised unfollow process
 
 1. Review **Lost followers**, **Not following back**, **Potentially inactive**, or **Sparse profiles**. Inspect each suggestion; not following back or posting rarely does not make someone a bot or an unwanted follow.
 2. Add people you want to retain to **Keep**. Select the exact accounts you want to unfollow. There is no unattended “unfollow whoever leaves” background rule: new detections need a new reviewed session.
-3. Choose **Review supervised unfollow**. Read the fixed account list, acknowledge your required authorization, and accept responsibility and continuous monitoring. Up to 30 accounts can be selected per session; this is a product bound, **not** a safe daily allowance.
+3. Choose **Review supervised unfollow**. Read the fixed account list, acknowledge your required authorization, and accept responsibility and continuous monitoring. Up to 10,000 observed accounts can be selected per session (the import/scan bound); this is **not** a safe daily allowance. Large sessions can take a long time and may be restricted by X.
 4. Choose **Open live monitor**. In the dedicated X following tab, check the signed-in account and choose **Begin supervised unfollow**. Opening the tab alone does not start actions.
 5. **Watch the large overlay continuously.** It shows who is being processed at that moment, why they were selected, an eight-second countdown before the action, progress, and recent outcomes. The extension locates the matching rendered row, checks the account/ID where available, clicks its Following button, and confirms only a dialog naming that handle.
-6. Use **Pause** to interrupt the countdown or stop before the next click. Resume is available only in the visible, focused overlay. Changing tabs, switching windows, hiding the page, changing the account/route, removing the overlay or reloading the cleanup page stops further progress until you explicitly resume or start over.
+6. Use **Pause** to interrupt the countdown or stop before the next click. Resume is available only in the visible, focused overlay. With **Pause if losing focus** on, changing tabs/windows or hiding the page pauses progress. With it off, the session may continue in a background tab; browsers can throttle its timing. Changed account/route, removed overlay and reloads still pause regardless of this setting.
 7. Use **Stop** to end the session. Closing the monitor stops it; closing its tab stops it too. **An action already submitted to X may still complete.** Neither Pause nor Stop can retract an already sent request, and an unfollow has no guaranteed undo.
 8. Review the result log. A success requires a rendered Follow button for the same account. A missing row, changed markup or ambiguous result is **uncertain**, pauses the run and is not retried automatically. Check the account manually before deciding what to do next.
 
@@ -70,7 +85,7 @@ The runner rechecks the keep list before each destructive click. It stops or pau
 
 Select accounts and choose **Inspect selected profiles** for a read-only supervised session. The extension visits their public profile pages and samples rendered posts, excluding visible social-context/pinned/reposted items. Each new profile waits for **Begin reading** in the monitor; page navigation never silently resumes work. It records the newest timestamp in that sample, the observation date and available bio. It does not inspect private posts, DMs, likes or browsing activity.
 
-A fresh sample whose newest observed public post is at least 90 days old can trigger an inactivity suggestion. That is not proof of inactivity: the timeline may be incomplete, a person may only read X, and profiles may remain useful. Unknown, protected and stale evidence is not treated as inactivity. A missing bio is a weak review signal. This version does not claim reliable bot detection or automatically unfollow based on a heuristic.
+A fresh sample whose newest observed public post is at least 90 days old can trigger an inactivity suggestion. That is not proof of inactivity: the timeline may be incomplete, a person may only read X, and profiles may remain useful. Unknown, protected and stale evidence is not treated as inactivity. A confirmed empty bio is a weak review signal. A failed read or an old empty field is shown as **Bio not collected** rather than evidence of a sparse profile. New scans read the bio from supported rendered list-card layouts, including bios with profile mentions; existing history is preserved. Rescan or inspect profiles to enrich old unknown fields. This version does not claim reliable bot detection or automatically unfollow based on a heuristic.
 
 Profile observations are applied while the dashboard is open; the latest inspection results remain in the session log. If the dashboard was closed, reopen it before another session to retain that evidence. Automatic real-time relationship event tracking is outside this browser edition.
 
@@ -107,7 +122,7 @@ npm --prefix followers-manager run check
 npm --prefix followers-manager run package
 ```
 
-Packaging produces `dist/followers-manager-0.1.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
+Packaging produces `dist/followers-manager-0.2.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
 
 Fixtures simulate rendered X pages and a granted site permission in an isolated temporary extension. They do not establish live X compatibility, real provider acceptance, or permission to automate. Do not test against a live account without the required X authorization and account owner's instruction.
 

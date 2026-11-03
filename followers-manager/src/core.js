@@ -67,6 +67,12 @@ function countField(value, fieldName) {
   return value;
 }
 
+function nullableBoolean(value, fieldName) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'boolean') throw new TypeError(fieldName + ' must be a boolean or null.');
+  return value;
+}
+
 function normalizeMember(input, now = Date.now()) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new TypeError('Each member must be an object.');
@@ -89,11 +95,20 @@ function normalizeMember(input, now = Date.now()) {
   const observedAt = parseIsoDate(input.observedAt, 'Member observedAt', { nullable: true, now });
   const lastPostAt = parseIsoDate(input.lastPostAt, 'Member lastPostAt', { nullable: true, now });
 
+  const name = textField(input.name, 'Member name', MAX_NAME_LENGTH);
+  const bio = textField(input.bio, 'Member bio', MAX_BIO_LENGTH);
+  const bioObserved = input.bioObserved === undefined ? bio.trim().length > 0 : input.bioObserved;
+  if (typeof bioObserved !== 'boolean') throw new TypeError('Member bioObserved must be a boolean.');
+
   return {
     id,
     username,
-    name: textField(input.name, 'Member name', MAX_NAME_LENGTH),
-    bio: textField(input.bio, 'Member bio', MAX_BIO_LENGTH),
+    name,
+    bio,
+    bioObserved,
+    verified: nullableBoolean(input.verified, 'Member verified'),
+    followsYou: nullableBoolean(input.followsYou, 'Member followsYou'),
+    isFollowing: nullableBoolean(input.isFollowing, 'Member isFollowing'),
     lastPostAt,
     observedAt,
     protected: protectedValue,
@@ -247,6 +262,10 @@ function archiveMemberToRecord(item, direction) {
     username,
     name: textField(record.name, 'Archive member name', MAX_NAME_LENGTH),
     bio: textField(record.bio, 'Archive member bio', MAX_BIO_LENGTH),
+    bioObserved: record.bioObserved,
+    verified: record.verified,
+    followsYou: record.followsYou,
+    isFollowing: record.isFollowing,
     lastPostAt: record.lastPostAt ?? null,
     observedAt: record.observedAt ?? null,
     protected: record.protected ?? null,
@@ -409,6 +428,11 @@ function isKept(record, keepList) {
   });
 }
 
+function sameKnownMember(left, right) {
+  if (left.id !== null && right.id !== null) return left.id === right.id;
+  return left.username !== '' && right.username !== '' && left.username === right.username;
+}
+
 function recordDateMs(value) {
   return value === null ? null : Date.parse(value);
 }
@@ -446,9 +470,12 @@ export function buildReview(snapshotInput, previousInput = null, keepList = [], 
     .filter((record) => record.username !== '')
     .map((record) => {
       const reasons = [];
+      const observedMs = recordDateMs(record.observedAt);
+      const lastPostMs = recordDateMs(record.lastPostAt);
+      const evidenceIsFresh = observedMs !== null && observedMs <= now && now - observedMs <= 7 * DAY_MS;
       let lost = false;
       if (lostByKey.size > 0 && followingModeForLost === lostMode) {
-        lost = lostByKey.has(keyForMode(record, lostMode));
+        lost = lostByKey.has(keyForMode(record, lostMode)) && !(evidenceIsFresh && record.followsYou === true);
       }
       if (lost) {
         reasons.push('No longer observed among your followers in comparable complete snapshots; absence alone cannot identify an unfollow, block, deletion, or suspension.');
@@ -458,17 +485,18 @@ export function buildReview(snapshotInput, previousInput = null, keepList = [], 
       const memberMode = identityMode([record]);
       const canCheckReciprocity = snapshot.coverage === 'complete' && currentIdentityMode !== null &&
         currentIdentityMode !== 'mixed' && memberMode === currentIdentityMode;
-      if (canCheckReciprocity && !followerKeys.has(keyForMode(record, currentIdentityMode))) {
+      if (evidenceIsFresh && record.followsYou === false) {
+        reasons.push('Does not appear to follow you in a recent following-list observation; recheck before acting.');
+      } else if (!(evidenceIsFresh && record.followsYou === true) && canCheckReciprocity && !followerKeys.has(keyForMode(record, currentIdentityMode))) {
         reasons.push('Does not appear among your followers in this complete snapshot; this says nothing about account quality.');
       }
 
-      const observedMs = recordDateMs(record.observedAt);
-      const lastPostMs = recordDateMs(record.lastPostAt);
-      const evidenceIsFresh = observedMs !== null && observedMs <= now && now - observedMs <= 7 * DAY_MS;
       if (record.protected !== true && evidenceIsFresh && lastPostMs !== null && lastPostMs <= observedMs && now - lastPostMs >= 90 * DAY_MS) {
         reasons.push('No public post observed for at least 90 days; activity evidence was checked within the last seven days. This does not show whether the account is still useful.');
       }
-      if (record.bio.trim() === '') {
+      if (!record.bioObserved) {
+        reasons.push('Bio not collected; scan again or inspect this profile.');
+      } else if (record.bio.trim() === '') {
         reasons.push('No bio is available; this is a weak profile signal and does not identify a bot.');
       }
 
@@ -479,7 +507,7 @@ export function buildReview(snapshotInput, previousInput = null, keepList = [], 
       let kind = 'review';
       if (lost) kind = 'lost';
       else if (reasons.some((reason) => reason.startsWith('No public post observed'))) kind = 'inactive';
-      else if (reasons.some((reason) => reason.startsWith('Does not appear among your followers'))) kind = 'nonfollower';
+      else if (reasons.some((reason) => reason.startsWith('Does not appear'))) kind = 'nonfollower';
 
       return {
         ...record,
@@ -489,6 +517,90 @@ export function buildReview(snapshotInput, previousInput = null, keepList = [], 
         canSelect: !kept && record.protected !== true,
       };
     });
+}
+
+export function buildActionQueue(snapshotInput, action, keepList = [], now = Date.now()) {
+  const supportedActions = new Set(['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-all']);
+  if (!supportedActions.has(action)) throw new TypeError('Unknown action queue type.');
+  const snapshot = normalizeSnapshot(snapshotInput);
+  if (!Number.isFinite(now)) throw new TypeError('now must be a timestamp in milliseconds.');
+  const keepEntries = normalizeKeepList(keepList);
+  const followingAction = action.startsWith('follow-');
+  const candidates = followingAction ? snapshot.followers : snapshot.following;
+  const warnings = [];
+  if (snapshot.coverage !== 'complete') {
+    warnings.push('Partial snapshot: the queue contains only observed records; unobserved accounts are not represented.');
+  }
+
+  let followerIdentityMode = null;
+  let followerKeys = new Set();
+  if (action === 'unfollow-nonfollowers') {
+    if (snapshot.coverage === 'complete') {
+      followerIdentityMode = resolveIdentityMode(snapshot.followers, snapshot.following);
+      if (followerIdentityMode) {
+        followerKeys = new Set(snapshot.followers.map((record) => keyForMode(record, followerIdentityMode)));
+      } else {
+        warnings.push('Follower and following identities are mixed or incompatible; only fresh explicit followsYou:false evidence can qualify.');
+      }
+    }
+  }
+
+  const handleCounts = new Map();
+  for (const record of candidates) {
+    if (record.username) handleCounts.set(record.username, (handleCounts.get(record.username) || 0) + 1);
+  }
+
+  let excluded = 0;
+  const queue = [];
+  for (const record of candidates) {
+    if (!record.username || (handleCounts.get(record.username) || 0) > 1) {
+      excluded += 1;
+      continue;
+    }
+    if (record.username === snapshot.account || record.protected === true || isKept(record, keepEntries)) {
+      excluded += 1;
+      continue;
+    }
+
+    let reasons;
+    if (action === 'follow-verified' || action === 'follow-all') {
+      if (action === 'follow-verified' && record.verified !== true) {
+        excluded += 1;
+        continue;
+      }
+      if (record.isFollowing === true || snapshot.following.some((following) => sameKnownMember(record, following))) {
+        excluded += 1;
+        continue;
+      }
+      reasons = [action === 'follow-verified'
+        ? 'Explicit profile evidence marks this follower as verified; confirm the current account before following.'
+        : 'Observed in your follower list; confirm the current account before following.'];
+    } else if (action === 'unfollow-all') {
+      reasons = ['Observed in your following list; confirm the target before unfollowing.'];
+    } else {
+      if (record.followsYou === true) {
+        excluded += 1;
+        continue;
+      }
+      const observedMs = recordDateMs(record.observedAt);
+      const freshExplicitNoFollow = record.followsYou === false && observedMs !== null &&
+        observedMs <= now && now - observedMs <= 7 * DAY_MS;
+      if (freshExplicitNoFollow) {
+        reasons = ['Fresh profile evidence explicitly says this account does not follow you; confirm before unfollowing.'];
+      } else {
+        const identityIsCompatible = followerIdentityMode !== null && identityMode([record]) === followerIdentityMode;
+        const absentFromCompleteFollowers = snapshot.coverage === 'complete' && identityIsCompatible &&
+          !followerKeys.has(keyForMode(record, followerIdentityMode));
+        if (!absentFromCompleteFollowers) {
+          excluded += 1;
+          continue;
+        }
+        reasons = ['No matching member appears in the complete follower set; absence does not identify an unfollow, block, deletion, or suspension.'];
+      }
+    }
+    queue.push({ ...record, reasons });
+  }
+  return { queue, excluded, warning: warnings.join(' ') };
 }
 
 function csvCell(value) {
@@ -527,16 +639,16 @@ export const DEMO_SNAPSHOTS = Object.freeze([
     followerCount: 4,
     followingCount: 4,
     followers: [
-      { id: 'demo-follower-1001', username: 'demoalpha', name: 'Alex Example', bio: 'Synthetic demo profile', observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
-      { id: 'demo-follower-1002', username: 'demobeta', name: 'Blair Example', bio: 'Synthetic demo profile', observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
-      { id: 'demo-follower-1003', username: 'demogoneone', name: 'Casey Example', bio: 'Synthetic demo profile', observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
-      { id: 'demo-follower-1004', username: 'demogonetwo', name: 'Devon Example', bio: 'Synthetic demo profile', observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
+      { id: 'demo-follower-1001', username: 'demoalpha', name: 'Alex Example', bio: 'Synthetic demo profile', verified: true, followsYou: true, isFollowing: false, observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
+      { id: 'demo-follower-1002', username: 'demobeta', name: 'Blair Example', bio: 'Synthetic demo profile', verified: false, followsYou: true, isFollowing: false, observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
+      { id: 'demo-follower-1003', username: 'demogoneone', name: 'Casey Example', bio: 'Synthetic demo profile', verified: null, followsYou: true, isFollowing: true, observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
+      { id: 'demo-follower-1004', username: 'demogonetwo', name: 'Devon Example', bio: 'Synthetic demo profile', verified: null, followsYou: true, isFollowing: false, observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
     ],
     following: [
-      { id: 'demo-follower-1003', username: 'demogoneone', name: 'Casey Example', bio: 'Synthetic demo profile', observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
-      { id: 'demo-following-2001', username: 'demomutual', name: 'Emery Example', bio: 'Synthetic demo profile', observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
-      { id: 'demo-following-2002', username: 'demoquiet', name: 'Finley Example', bio: 'Synthetic demo profile', observedAt: demoEarlierAt, lastPostAt: demoOldPostAt, protected: false },
-      { id: 'demo-following-2003', username: 'demosparse', name: 'Gray Example', bio: '', observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
+      { id: 'demo-follower-1003', username: 'demogoneone', name: 'Casey Example', bio: 'Synthetic demo profile', bioObserved: true, verified: null, followsYou: true, isFollowing: true, observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
+      { id: 'demo-following-2001', username: 'demomutual', name: 'Emery Example', bio: 'Synthetic demo profile', verified: true, followsYou: false, isFollowing: true, observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
+      { id: 'demo-following-2002', username: 'demoquiet', name: 'Finley Example', bio: 'Synthetic demo profile', verified: false, followsYou: false, isFollowing: true, observedAt: demoEarlierAt, lastPostAt: demoOldPostAt, protected: false },
+      { id: 'demo-following-2003', username: 'demosparse', name: 'Gray Example', bio: '', bioObserved: true, verified: null, followsYou: null, isFollowing: true, observedAt: demoEarlierAt, lastPostAt: demoPreviousPostAt, protected: false },
     ],
   }),
   normalizeSnapshot({
@@ -547,17 +659,17 @@ export const DEMO_SNAPSHOTS = Object.freeze([
     followerCount: 4,
     followingCount: 5,
     followers: [
-      { id: 'demo-follower-1001', username: 'demoalpha', name: 'Alex Example', bio: 'Synthetic demo profile', observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
-      { id: 'demo-follower-1002', username: 'demobeta', name: 'Blair Example', bio: 'Synthetic demo profile', observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
-      { id: 'demo-follower-1005', username: 'demogamma', name: 'Harper Example', bio: 'Synthetic demo profile', observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
-      { id: 'demo-follower-1006', username: 'demodelta', name: 'Indigo Example', bio: 'Synthetic demo profile', observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
+      { id: 'demo-follower-1001', username: 'demoalpha', name: 'Alex Example', bio: 'Synthetic demo profile', verified: true, followsYou: true, isFollowing: false, observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
+      { id: 'demo-follower-1002', username: 'demobeta', name: 'Blair Example', bio: 'Synthetic demo profile', verified: false, followsYou: true, isFollowing: false, observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
+      { id: 'demo-follower-1005', username: 'demogamma', name: 'Harper Example', bio: 'Synthetic demo profile', verified: null, followsYou: true, isFollowing: false, observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
+      { id: 'demo-follower-1006', username: 'demodelta', name: 'Indigo Example', bio: 'Synthetic demo profile', verified: null, followsYou: true, isFollowing: false, observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
     ],
     following: [
-      { id: 'demo-follower-1003', username: 'demogoneone', name: 'Casey Example', bio: 'Synthetic demo profile', observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
-      { id: 'demo-following-2001', username: 'demomutual', name: 'Emery Example', bio: 'Synthetic demo profile', observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
-      { id: 'demo-following-2002', username: 'demoquiet', name: 'Finley Example', bio: 'Synthetic demo profile', observedAt: demoObservedAt, lastPostAt: demoOldPostAt, protected: false },
-      { id: 'demo-following-2003', username: 'demosparse', name: 'Gray Example', bio: '', observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
-      { id: 'demo-following-2004', username: 'demoprotected', name: 'Jules Example', bio: 'Synthetic protected demo profile', observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: true },
+      { id: 'demo-follower-1003', username: 'demogoneone', name: 'Casey Example', bio: 'Synthetic demo profile', bioObserved: true, verified: null, followsYou: false, isFollowing: true, observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
+      { id: 'demo-following-2001', username: 'demomutual', name: 'Emery Example', bio: 'Synthetic demo profile', verified: true, followsYou: false, isFollowing: true, observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
+      { id: 'demo-following-2002', username: 'demoquiet', name: 'Finley Example', bio: 'Synthetic demo profile', verified: false, followsYou: false, isFollowing: true, observedAt: demoObservedAt, lastPostAt: demoOldPostAt, protected: false },
+      { id: 'demo-following-2003', username: 'demosparse', name: 'Gray Example', bio: '', bioObserved: true, verified: null, followsYou: null, isFollowing: true, observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: false },
+      { id: 'demo-following-2004', username: 'demoprotected', name: 'Jules Example', bio: 'Synthetic protected demo profile', verified: null, followsYou: false, isFollowing: true, observedAt: demoObservedAt, lastPostAt: demoRecentPostAt, protected: true },
     ],
   }),
 ]);

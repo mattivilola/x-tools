@@ -232,6 +232,22 @@ test('background service enforces supervised session ownership and terminal-stat
     assert.match(response.error, /paused or no longer visible/);
     state.windows.get(1).focused = true;
 
+    // Explicit background mode skips only the focus requirement, never route/ownership checks.
+    state.storage.fmSession.pauseOnFocusLoss = false;
+    state.windows.get(1).focused = false;
+    response = await send({ type: 'fm:guard', id: sessionId }, ownedSender);
+    assert.equal(response.ok, true);
+    state.tabs.get(tabId).url = 'https://x.com/someone/following';
+    response = await send({ type: 'fm:guard', id: sessionId }, ownedSender);
+    assert.equal(response.ok, false); assert.match(response.error, /page changed/);
+    state.tabs.get(tabId).url = 'https://x.com/fixture/following';
+    response = await send({ type: 'fm:pause', id: sessionId }, ownedSender);
+    response = await send({ type: 'fm:resume', id: sessionId }, ownedSender);
+    assert.equal(response.ok, false, 'Resume still requires the focused monitor');
+    state.windows.get(1).focused = true;
+    await send({ type: 'fm:resume', id: sessionId }, ownedSender);
+    state.storage.fmSession.pauseOnFocusLoss = true;
+
     state.storage.fmData.keepList = [{ id: 'member-1', username: 'alice' }];
     response = await send({ type: 'fm:guard', id: sessionId }, ownedSender);
     assert.equal(response.ok, false);
@@ -270,6 +286,13 @@ test('background service enforces supervised session ownership and terminal-stat
     assert.equal(persisted.status, 'stopped');
     assert.equal(persisted.results.length, 1, 'the stale duplicate result must not be persisted');
     assert.equal(persisted.index, 1);
+
+    response = await send({ ...baseStart, mode: 'follow', action: 'follow-verified', queue: [{ id:'member-2', username:'bruno', verified:true }] }, appSender);
+    assert.equal(response.ok, true, 'a terminal previous job allows a new follow-back session');
+    assert.equal(response.session.status, 'ready');
+    assert.equal(response.session.mode, 'follow');
+    assert.equal(state.tabs.get(response.session.tabId).url, 'https://x.com/fixture/followers');
+    assert.equal(response.session.queue[0].requireVerified, true);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     if (previousChrome) Object.defineProperty(globalThis, 'chrome', previousChrome);

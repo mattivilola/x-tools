@@ -1,4 +1,4 @@
-import { mkdtempSync, cpSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, cpSync, copyFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +12,8 @@ try {
   mkdirSync(join(stage, 'assets'));
   for (const size of [16, 32, 48, 128]) copyFileSync(join(root, 'assets', `icon-${size}.png`), join(stage, 'assets', `icon-${size}.png`));
   copyFileSync(join(root, '../LICENSE'), join(stage, 'LICENSE'));
-  const zip = join(output, 'followers-manager-0.1.0.zip');
+  const {version} = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'));
+  const zip = join(output, `followers-manager-${version}.zip`);
   execFileSync('zip', ['-q', '-r', '-FS', zip, 'manifest.json', 'app.html', 'style.css', 'src', 'assets', 'PRIVACY.md', 'LICENSE'], { cwd: stage });
   console.log(zip);
 } finally { rmSync(stage, { recursive: true, force: true }); }
