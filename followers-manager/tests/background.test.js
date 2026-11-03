@@ -341,6 +341,22 @@ test('background service enforces supervised session ownership and terminal-stat
     const completedSender = { ...ownedSender, tab: { id: completedTab } };
     await send({ type: 'fm:resume', id: completedScanId }, completedSender);
     response = await send({ type: 'fm:update', id: completedScanId, recordChanges: [{ username: 'alice' }], status: 'complete' }, completedSender);
+    assert.equal(response.ok, false, 'idle scanning cannot declare completion automatically');
+    await send({ type: 'fm:update', id: completedScanId, recordChanges: [{ username: 'alice' }], status: 'paused', scanReview: 'stalled' }, completedSender);
+    assert.equal(state.storage.fmSession.status, 'paused'); assert.equal(state.tabs.has(completedTab), true, 'uncertain scans keep the monitor open');
+    assert.equal((await send({ type: 'fm:finish-scan', id: completedScanId }, appSender)).ok, false);
+    response = await send({ type: 'fm:resume', id: completedScanId, autoRetry: true }, completedSender);
+    assert.equal(response.session.scanRetriesRemaining, 3);
+    for (let left = 2; left >= 0; left--) {
+      response = await send({ type: 'fm:update', id: completedScanId, retryUsed: true }, completedSender);
+      assert.equal(response.session.scanRetriesRemaining, left);
+    }
+    assert.equal((await send({ type: 'fm:update', id: completedScanId, retryUsed: true }, completedSender)).ok, false, 'retry budget is bounded');
+    await send({ type: 'fm:pause', id: completedScanId, message: 'X restriction appeared.' }, completedSender);
+    assert.equal((await send({ type: 'fm:resume', id: completedScanId, autoRetry: true }, completedSender)).ok, false, 'Auto Retry never resumes an ordinary restriction pause');
+    await send({ type: 'fm:resume', id: completedScanId }, completedSender);
+    await send({ type: 'fm:update', id: completedScanId, status: 'paused', scanReview: 'stalled' }, completedSender);
+    response = await send({ type: 'fm:finish-scan', id: completedScanId }, completedSender);
     assert.equal(response.ok, true); assert.equal(state.storage.fmSession.status, 'complete');
     assert.equal(state.storage.fmSession.records.length, 1, 'results are durable before closing the processing tab');
     assert.equal(state.removedTabs.includes(completedTab), true);
@@ -355,8 +371,11 @@ test('background service enforces supervised session ownership and terminal-stat
 
     response = await send({ ...baseStart, mode: 'scan', queue: [] }, appSender);
     const changedId = response.session.id, changedTab = response.session.tabId;
+    await send({ type: 'fm:resume', id: changedId }, { ...ownedSender, tab: { id: changedTab } });
     state.tabs.get(changedTab).url = 'https://x.com/home';
-    await send({ type: 'fm:update', id: changedId, status: 'complete' }, { ...ownedSender, tab: { id: changedTab } });
+    const changedSender = { ...ownedSender, tab: { id: changedTab } };
+    await send({ type: 'fm:update', id: changedId, status: 'paused', scanReview: 'stalled' }, changedSender);
+    await send({ type: 'fm:finish-scan', id: changedId }, changedSender);
     assert.equal(state.tabs.has(changedTab), true, 'a processing tab navigated elsewhere is never closed');
 
     response = await send({ ...baseStart, action: 'unfollow-unverified-nonfollowers' }, appSender);

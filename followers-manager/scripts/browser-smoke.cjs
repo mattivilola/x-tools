@@ -31,6 +31,14 @@ function fixture(path) {
   function openConfirm(name,id,button){const dialog=document.createElement('div');dialog.dataset.testid='confirmationSheetDialog';dialog.setAttribute('role','alertdialog');dialog.innerHTML='<p>Unfollow @'+(window.fixtureWrong?'wrongaccount':name)+'?</p><button data-testid="confirmationSheetConfirm">Unfollow</button><button data-testid="confirmationSheetCancel">Cancel</button>';document.body.append(dialog);dialog.querySelector('[data-testid=confirmationSheetCancel]').onclick=()=>dialog.remove();dialog.querySelector('[data-testid=confirmationSheetConfirm]').onclick=()=>{window.fixtureClicks++;window.recordFixtureAction('unfollow',name);button.dataset.testid=id+'-follow';button.textContent='Follow';dialog.remove();};}
   </script></body>`;
 }
+function pagedListFixture(direction, delayed) {
+  return `<!doctype html><meta charset="utf-8"><title>Paged list fixture</title><style>body{font:16px system-ui;padding:20px}.card{height:44px}#list{height:380px;overflow-y:auto;width:580px;border:1px solid}</style>
+  <a data-testid="AppTabBar_Profile_Link" href="/fixture">Your profile</a><main data-testid="primaryColumn"><div id="list"><div id="cards"></div><div id="loader" role="progressbar" hidden>Loading more accounts</div></div></main>
+  <aside data-testid="sidebarColumn"><div data-testid="UserCell"><a href="/sidebar">Sidebar suggestion</a><button data-testid="99999-follow">Follow</button></div></aside>
+  <script>const list=document.getElementById('list'),cards=document.getElementById('cards'),loader=document.getElementById('loader');let page=0,pending=false;
+  function render(start,end){cards.innerHTML=Array.from({length:end-start},(_,j)=>{const i=start+j;return '<div class="card" data-testid="UserCell" role="button"><a href="/listuser'+i+'">Person '+i+'</a><div dir="auto">Synthetic list bio '+i+'</div><button data-testid="'+(1000+i)+'-${direction === 'following' ? 'unfollow' : 'follow'}">${direction === 'following' ? 'Following' : 'Follow back'}</button></div>';}).join('');}
+  render(0,200);list.addEventListener('scroll',()=>{if(page||pending||list.scrollTop+list.clientHeight<list.scrollHeight-5)return;pending=true;loader.hidden=false;setTimeout(()=>{page=1;loader.hidden=true;render(200,300);list.scrollTop=0;pending=false;},${delayed ? 18000 : 120});});</script>`;
+}
 (async () => {
   try {
     context = await chromium.launchPersistentContext(join(temporary, 'profile'), {
@@ -62,6 +70,11 @@ function fixture(path) {
       if (!page.isClosed()) await page.waitForEvent('close', { timeout });
       await app.waitForFunction(() => document.getElementById('session-title').textContent.includes('complete'));
       assert.equal(await app.evaluate(() => document.visibilityState), 'visible', 'completion activates the existing dashboard');
+    }
+    async function reviewAndFinish(page, timeout = 25000) {
+      await page.locator('#fm-scan-review').waitFor({ state: 'visible', timeout });
+      assert.equal(page.isClosed(), false, 'idle scans keep their processing tab open');
+      await page.bringToFront(); await page.locator('#fm-finish-scan').click(); await completeAndReturn(page);
     }
     if (!process.argv.includes('--follow-only')) {
     await app.locator('#demo').click(); await app.waitForFunction(() => document.querySelectorAll('#people tr').length === 5);
@@ -132,7 +145,7 @@ function fixture(path) {
     await app.bringToFront(); await app.locator('#scan-following').click(); await app.locator('#authorization').check(); await app.locator('#accept').check();
     const scanPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const scan = await scanPromise;
     await scan.goto('https://x.com/fixture/following'); await scan.bringToFront(); await scan.locator('#fm-resume').click();
-    await completeAndReturn(scan, 18000);
+    await reviewAndFinish(scan, 18000);
     assert.equal(countActions(scan, 'unfollow'), 0);
     assert.equal(await app.locator('#scan-save').isVisible(), true, 'the save form opens automatically after a completed scan');
     assert.equal(await app.locator('#coverage').isChecked(), false);
@@ -141,7 +154,7 @@ function fixture(path) {
     assert.equal(await app.locator('#scan-save').isHidden(), true);
     await app.reload(); await app.locator('#total').waitFor();
     assert.equal(await app.locator('#scan-save').isHidden(), true, 'saved scans do not reopen the save prompt on reload');
-    check('completed scans close their owned tab, return to the dashboard save form, and retain partial-coverage review');
+    check('stalled scans stay open for operator review; explicit finish opens the save form with coverage unchecked');
 
     const collected = await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession.records);
     assert.equal(collected.length, 2); assert.equal(collected[0].bioObserved, true);
@@ -165,10 +178,41 @@ function fixture(path) {
     const bgPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const bg = await bgPromise;
     await bg.goto('https://x.com/fixture/following'); await bg.bringToFront(); await bg.locator('#fm-resume').click();
     await bg.locator('.status').filter({hasText:'observed accounts'}).waitFor(); await app.bringToFront();
-    await completeAndReturn(bg, 35000);
+    await bg.locator('#fm-scan-review').waitFor({ state: 'visible', timeout: 25000 });
+    assert.equal(bg.isClosed(), false); await bg.bringToFront(); await bg.locator('#fm-scan-retry').click();
+    await bg.locator('.status').filter({ hasText: 'Loading retry 1/3' }).waitFor({ timeout: 18000 });
+    await bg.locator('#fm-pause').click(); await bg.waitForTimeout(2500);
+    assert.equal((await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession)).status, 'paused');
+    assert.equal((await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession)).scanRetriesRemaining, 0);
+    await bg.locator('#fm-resume').click(); await reviewAndFinish(bg);
     assert.equal((await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession)).status, 'complete');
     assert.equal(countActions(bg, 'unfollow'), 0);
-    check('turning off Pause if losing focus permits a background read-only scan to complete');
+    check('background scans retain review controls; Auto Retry is opt-in and Pause cancels retries before explicit finish');
+
+    for (const direction of ['following', 'followers']) {
+      await context.route('https://x.com/**', (route) => route.fulfill({ contentType: 'text/html', body: pagedListFixture(direction, direction === 'following') }));
+      await app.bringToFront(); await app.locator(`#scan-${direction}`).click();
+      await app.locator('#authorization').check(); await app.locator('#accept').check();
+      const pagesPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const pages = await pagesPromise;
+      await pages.goto(`https://x.com/fixture/${direction}`); await pages.bringToFront(); await pages.locator('#fm-resume').click();
+      if (direction === 'following') {
+        await pages.locator('#fm-scan-review').waitFor({ state: 'visible', timeout: 45000 });
+        const stalled = await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession);
+        assert.equal(stalled.records.length, 200); assert.equal(stalled.status, 'paused'); assert.equal(pages.isClosed(), false);
+        assert.equal(stalled.scanProgress.atBottom, true, 'scrolling through the already-read 200 cards must not count as a stall');
+        await pages.locator('#fm-scan-retry').click();
+      }
+      await pages.locator('.progress-text').filter({ hasText: '300 accounts collected' }).waitFor({ timeout: 45000 });
+      assert.equal(await pages.evaluate(() => document.querySelectorAll('#cards [data-testid="UserCell"]').length), 100, 'old cards are virtualized out but accumulated records survive');
+      assert.equal(await pages.evaluate(() => scrollY), 0, 'the nested list, not the page, is scrolled');
+      await pages.locator('#fm-pause').click();
+      await pages.locator('#fm-resume').click(); await reviewAndFinish(pages, 25000);
+      const collected = await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession);
+      assert.equal(collected.records.length, 300); assert.equal(collected.records.some((r) => r.username === 'sidebar'), false);
+      await app.locator('#confirm-save').click();
+      check(`${direction} scan collects 300 virtualized accounts beyond an initial 200 in a nested scroller${direction === 'following' ? ', with explicit retry after a slow load' : ''}`);
+    }
+    await context.route('https://x.com/**', (route) => route.fulfill({ contentType: 'text/html', body: fixture(new URL(route.request().url()).pathname) }));
 
     } else {
       await app.locator('#account').fill('fixture'); await app.locator('#account').dispatchEvent('change');
@@ -341,6 +385,8 @@ function fixture(path) {
     const orphanPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const orphan = await orphanPromise;
     await orphan.goto('https://x.com/fixture/following'); await orphan.bringToFront(); await orphan.locator('#fm-resume').click();
     const replacementPromise = context.waitForEvent('page', { timeout: 25000 }); await app.close();
+    await orphan.locator('#fm-scan-review').waitFor({ state: 'visible', timeout: 18000 });
+    assert.equal(orphan.isClosed(), false); await orphan.locator('#fm-finish-scan').click();
     const replacement = await replacementPromise; await replacement.locator('#scan-save').waitFor({ state: 'visible' });
     if (!orphan.isClosed()) await orphan.waitForEvent('close');
     assert.equal(await replacement.locator('#coverage').isChecked(), false);

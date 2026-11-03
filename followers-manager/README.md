@@ -2,7 +2,7 @@
 
 **Understand your audience. Keep a following list you actually want.**
 
-A local-first Chromium extension for follower history, relationship changes and **reviewed follow-back and unfollow sessions**. Version: **v0.5.0**.
+A local-first Chromium extension for follower history, relationship changes and **reviewed follow-back and unfollow sessions**. Version: **v0.6.0**.
 
 **Made by [Matti Vilola](https://github.com/mattivilola) with ❤️, sponsored and distributed by [ILO Applications SL](https://iloapps.com).**
 
@@ -45,7 +45,7 @@ The installed extension and toolbar use the retro pixel-art **X / FM** icon (FM 
 1. Leave demo mode and enter the exact handle of your signed-in X account.
 2. Choose **Scan followers**. Read the notice, attest to the required authorization, accept continuous supervision, and grant X site access if you intend to proceed.
 3. In the new X tab, check the account and overlay, then choose **Begin reading**. Keep this tab visible and focused while the scan scrolls, or explicitly turn off **Pause if losing focus** in the start dialog to permit background continuation. Start and Resume always require a focused monitor.
-4. On completion, the tool closes its own processing tab and returns to the dashboard with **Save the observation** open. If you paused or stopped early, return manually and choose **Save scan**. Enter an exact total from X if known. Leave coverage unchecked unless you independently verified the full list. No more loaded cards does not establish completeness.
+4. A scan pauses for review when no new accounts arrive, a time bound is reached, or capacity is reached. The monitor stays open. Choose **Resume** to continue reading, or **Auto Retry (3 attempts)** for a loading stall. When you decide to end the scan, choose **Finish scan and review results**; only then does the processing tab close and **Save the observation** open on the dashboard. If you paused or stopped early, return manually and choose **Save scan**. Enter an exact total from X if known. Leave coverage unchecked unless you independently verified the full list. No more loaded cards does not establish completeness.
 5. Repeat for **Scan following**. Opposite-direction browser observations within 30 minutes can be paired. They become complete only when you explicitly verified both lists; concurrent relationship changes can still make the combined observation inconsistent.
 6. Repeat later to see count progress and compare relationships. In the saved-snapshots section, **Confirm full coverage** is available for paired partial data after you independently verify both lists.
 
@@ -73,9 +73,17 @@ Target lookup checks the current rendered cards plus one scroll/look-ahead. A mi
 
 Visible restriction/limit alerts, toasts or dialogs and supported challenge elements pause the process; they are never bypassed or retried automatically. Stop on any notice the detector does not recognize.
 
+### Scan stalls and loading retries
+
+Both followers and following scans count forward scroll movement as progress, even when all currently mounted cards have already been read. They scroll the nearest list container, including nested scrolling panels, and preserve records when X virtualizes older cards out of the DOM. List collection excludes sidebar suggestions; fallback bio reading excludes follow/unfollow tooltips.
+
+Repeated checks without new accounts or forward movement pause for **operator review**, never automatic completion. The monitor shows current list scroll position, whether more loaded scroll space remains, loading indicators and retry budget. No end-of-list guarantee is inferred from these signals. **Resume** makes another reading pass. **Auto Retry (3 attempts)** is an explicit opt-in for loading stalls: at most three additional waits of 2, 4 and 8 seconds followed by reading/scrolling attempts, with normal idle checks between attempts. Pause/Stop/focus pausing cancels retries; warnings, restrictions, challenges, route/account changes and reloads still pause. It never clicks X retry buttons or bypasses access controls. Capacity review cannot retry beyond the 10,000-record bound.
+
+Use **Finish scan and review results** only when you want to stop collecting and save the observation, whether partial or independently checked as complete. It does not mark full coverage automatically. Existing saved partial scans remain preserved; scans finished by older versions need a fresh scan to collect missing pages.
+
 ### Returning after completion
 
-Completed scans, follow-back/unfollow batches and final profile inspections return to the existing dashboard (or open one if it was closed). Only the session-owned processing tab is closed, and only if it still has the expected URL. Results are stored before closing. A scan opens **Save the observation**, with complete-coverage confirmation unchecked; saving remains your decision. Once saved, this prompt stays closed on reload. Follow/unfollow outcomes are already saved in session history, which opens on return. Paused, stopped or uncertain sessions stay available for review and do not automatically close. If return fails, the completed monitor offers **Return to dashboard** for an explicit retry.
+Scans explicitly finished by you, completed follow-back/unfollow batches and final profile inspections return to the existing dashboard (or open one if it was closed). Only the session-owned processing tab is closed, and only if it still has the expected URL. Results are stored before closing. A scan opens **Save the observation**, with complete-coverage confirmation unchecked; saving remains your decision. Once saved, this prompt stays closed on reload. Follow/unfollow outcomes are already saved in session history, which opens on return. Paused, stopped or uncertain sessions stay available for review and do not automatically close. If return fails, the completed monitor offers **Return to dashboard** for an explicit retry.
 
 ### First 5 test batch and duration
 
@@ -147,7 +155,7 @@ npm --prefix followers-manager run check
 npm --prefix followers-manager run package
 ```
 
-Packaging produces `dist/followers-manager-0.5.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
+Packaging produces `dist/followers-manager-0.6.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
 
 Fixtures simulate rendered X pages and a granted site permission in an isolated temporary extension. They do not establish live X compatibility, real provider acceptance, or permission to automate. Do not test against a live account without the required X authorization and account owner's instruction.
 

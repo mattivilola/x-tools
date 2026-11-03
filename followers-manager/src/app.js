@@ -128,7 +128,7 @@ function renderSession() {
   $('session').hidden = !session || demo;
   updateSessionButtons();
   if (!session || demo) return;
-  $('session-title').textContent = `${session.mode} · ${session.status} · @${session.account}`;
+  $('session-title').textContent = `${session.mode} · ${session.scanReview && session.status === 'paused' ? 'needs review' : session.status} · @${session.account}`;
   $('session-info').textContent = `${session.mode === 'scan' ? `${session.records.length} observed accounts` : `${session.index}/${session.queue.length} processed`} — ${session.message}`;
   $('pause-session').disabled = session.status !== 'running'; $('stop-session').disabled = ['complete', 'stopped', 'error'].includes(session.status);
   $('save-scan').hidden = session.mode !== 'scan' || !session.records.length || session.status === 'running' || !!session.savedAt;

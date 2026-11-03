@@ -120,6 +120,11 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       if (s.status !== 'complete') throw new Error('Finish the session before returning automatically.');
       return finish(s);
     }
+    if (request.type === 'fm:finish-scan') {
+      if (!fromTab || s.mode !== 'scan' || s.status !== 'paused' || !s.scanReview) throw new Error('Review the paused scan in its monitor before finishing.');
+      return finish(await write({ ...s, status: 'complete', completedAt: new Date().toISOString(), scanRetriesRemaining: 0,
+        message: 'Scan ended by you after review. Coverage remains partial until independently verified.' }));
+    }
     if (request.type === 'fm:saved') {
       if (!isApp(sender) || s.mode !== 'scan' || s.status === 'running') throw new Error('Save scan results from the dashboard after pausing or completing.');
       return write({ ...s, savedAt: new Date().toISOString() });
@@ -127,11 +132,14 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     // Record an already submitted request's eventual result without restarting a stopped session.
     if (TERMINAL.has(s.status) && !(request.type === 'fm:update' && request.result && fromTab)) return s;
     if (request.type === 'fm:pause' || request.type === 'fm:stop') {
-      return write({ ...s, status: request.type === 'fm:stop' ? 'stopped' : 'paused', message: String(request.message || (request.type === 'fm:stop' ? 'Stopped. No further actions will start.' : 'Paused. Resume from the live overlay.')).slice(0, 300) });
+      return write({ ...s, scanReview: null, scanRetriesRemaining: 0, status: request.type === 'fm:stop' ? 'stopped' : 'paused', message: String(request.message || (request.type === 'fm:stop' ? 'Stopped. No further actions will start.' : 'Paused. Resume from the live overlay.')).slice(0, 300) });
     }
     if (request.type === 'fm:resume') {
       if (!fromTab || !await focused(s)) throw new Error('Keep the live monitor visible and focused to resume.');
-      return write({ ...s, savedAt: s.mode === 'scan' ? null : s.savedAt, status: 'running', message: 'Running under your supervision.' });
+      if (request.autoRetry && (s.mode !== 'scan' || s.scanReview !== 'stalled')) throw new Error('Auto Retry is available only for a stalled scan, never a restriction or challenge.');
+      if (s.mode === 'scan' && s.records.length >= 10000) throw new Error('The scan capacity was reached. Finish and review the partial results.');
+      return write({ ...s, savedAt: s.mode === 'scan' ? null : s.savedAt, scanReview: null,
+        scanRetriesRemaining: request.autoRetry === true ? 3 : 0, status: 'running', message: 'Running under your supervision.' });
     }
     if (request.type === 'fm:guard') {
       if (!fromTab || s.status !== 'running') throw new Error('Session paused or no longer visible.');
@@ -144,11 +152,23 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
     }
     if (request.type === 'fm:update') {
       if (!fromTab) throw new Error('Only the monitor can publish progress.');
+      if (s.mode === 'scan' && request.scanReview && s.status !== 'running') return s; // A late stall must not replace a restriction/user pause.
       const patch = {};
       if (typeof request.message === 'string') patch.message = request.message.slice(0, 300);
       if (request.current !== undefined) patch.current = s.queue[s.index] || null;
       if (request.recordChanges?.length && Array.isArray(request.recordChanges) && s.mode === 'scan') patch.records = mergeRecords(s.records, request.recordChanges.slice(0, 10000));
+      if (s.mode === 'scan' && ['stalled', 'capacity', 'time-bound'].includes(request.scanReview) && request.status === 'paused') patch.scanReview = request.scanReview;
+      if (s.mode === 'scan' && request.scanProgress) {
+        const p = request.scanProgress;
+        patch.scanProgress = Object.fromEntries(['scrollTop', 'scrollHeight', 'viewportHeight'].map((key) => [key, Math.max(0, Math.min(1e9, Number(p[key]) || 0))]));
+        patch.scanProgress.atBottom = p.atBottom === true; patch.scanProgress.loading = p.loading === true;
+      }
+      if (s.mode === 'scan' && request.retryUsed) {
+        if (s.status !== 'running' || !(s.scanRetriesRemaining > 0)) throw new Error('No automatic scan retries remain.');
+        patch.scanRetriesRemaining = s.scanRetriesRemaining - 1;
+      }
       if (!TERMINAL.has(s.status) && request.status && ['complete', 'error', 'paused'].includes(request.status)) {
+        if (request.status === 'complete' && s.mode === 'scan') throw new Error('A scan cannot infer completion. Finish it explicitly from the review controls.');
         if (request.status === 'complete' && s.mode !== 'scan' && s.index !== s.queue.length) throw new Error('The fixed selection is not fully processed.');
         patch.status = request.status;
         if (patch.status === 'complete') patch.completedAt = new Date().toISOString();
@@ -180,7 +200,7 @@ async function pauseIfAway() {
   await serial(async () => {
     const s = await read(); if (!s || s.status !== 'running' || s.pauseOnFocusLoss === false) return;
     let active = false; try { active = await focused(s); } catch { /* Changed page or closed tab. */ }
-    if (!active) await write({ ...s, status: 'paused', message: 'Paused because the monitor lost focus. Return and press Resume.' });
+    if (!active) await write({ ...s, status: 'paused', scanReview: null, scanRetriesRemaining: 0, message: 'Paused because the monitor lost focus. Return and press Resume.' });
   });
 }
 chrome.tabs.onActivated.addListener(() => { void pauseIfAway(); });

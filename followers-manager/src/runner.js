@@ -49,19 +49,28 @@
     const progress = el('progress'); progress.max = Math.max(session.queue.length, 1); progress.value = 0; progress.setAttribute('aria-label', 'Session progress');
     main.append(progress, el('p', '', 'progress-text'), el('p', '', 'estimate muted'), el('p', '', 'timer'));
     const status = el('p', '', 'status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); main.append(status);
+    const scanReview = el('div', '', 'risk'); scanReview.id = 'fm-scan-review';
+    scanReview.append(el('strong', 'Check whether the list has finished loading'), el('p', 'No new cards does not prove the end. Scroll the list yourself if needed, then Resume, or use Auto Retry for up to three loading attempts. Finish only when you want to review and save this observation.'));
+    main.append(scanReview, el('p', '', 'scan-progress muted'));
     main.append(el('p', ['cleanup','follow'].includes(session.mode) ? 'You are responsible for these account actions. Monitoring and consent do not change X’s rules. X restricts website scripting and automated following/unfollowing; restrictions or suspension remain possible.' : 'This session reads rendered pages. Lists can be partial; activity evidence can be unavailable. No follow/unfollow actions occur in this mode.', 'risk'));
     main.append(el('p', 'Stop blocks further clicks. A request already submitted may still finish. Unfollows have no guaranteed undo.', 'muted'));
     main.append(el('div', '', 'log'));
     const footer = el('footer');
-    const resume = el('button', 'Begin'); resume.id = 'fm-resume'; resume.addEventListener('click', async (event) => {
+    async function begin(event, autoRetry = false) {
       if (!event.isTrusted || busy) return;
-      try { if (document.visibilityState !== 'visible' || !document.hasFocus()) throw new Error('Return to the focused monitor to begin or resume.'); assertLocal(); localControl = ''; await message('resume'); void run(); } catch (error) { await pause(error.message); }
+      try { if (document.visibilityState !== 'visible' || !document.hasFocus()) throw new Error('Return to the focused monitor to begin or resume.'); assertLocal(); localControl = ''; await message('resume', { autoRetry }); void run(); } catch (error) { await pause(error.message); }
+    }
+    const resume = el('button', 'Begin'); resume.id = 'fm-resume'; resume.addEventListener('click', (event) => { void begin(event); });
+    const retry = el('button', 'Auto Retry (3 attempts)', 'secondary'); retry.id = 'fm-scan-retry'; retry.addEventListener('click', (event) => { void begin(event, true); });
+    const finishScan = el('button', 'Finish scan and review results'); finishScan.id = 'fm-finish-scan'; finishScan.addEventListener('click', async (event) => {
+      if (!event.isTrusted || busy) return;
+      try { await message('finish-scan'); } catch (error) { session.message = error.message; render(); }
     });
     const pauseButton = el('button', 'Pause', 'secondary'); pauseButton.id = 'fm-pause'; pauseButton.addEventListener('click', () => { void pause('Paused by you. Press Resume when ready.'); });
     const stop = el('button', 'Stop', 'stop'); stop.id = 'fm-stop'; stop.addEventListener('click', () => { void stopRun(); });
     const close = el('button', 'Close monitor', 'close'); close.addEventListener('click', async () => { await stopRun(); host.remove(); });
     const back = el('button', 'Return to dashboard', 'secondary'); back.id = 'fm-return'; back.addEventListener('click', () => { void message('return').catch((error) => { session.message = error.message; render(); }); });
-    footer.append(resume, pauseButton, stop, back, close); panel.append(header, main, footer); shadow.append(panel); document.documentElement.append(host); render();
+    footer.append(resume, retry, finishScan, pauseButton, stop, back, close); panel.append(header, main, footer); shadow.append(panel); document.documentElement.append(host); render();
   }
   function render() {
     if (!shadow || !session) return;
@@ -79,6 +88,15 @@
     resume.disabled = session.status === 'running' || terminal.has(session.status) || busy;
     shadow.querySelector('#fm-pause').disabled = session.status !== 'running'; shadow.querySelector('#fm-stop').disabled = terminal.has(session.status);
     shadow.querySelector('#fm-return').hidden = session.status !== 'complete';
+    const review = session.mode === 'scan' && session.status === 'paused' && !!session.scanReview;
+    shadow.querySelector('#fm-scan-review').hidden = !review;
+    shadow.querySelector('#fm-scan-retry').hidden = !review || session.scanReview !== 'stalled';
+    shadow.querySelector('#fm-scan-retry').disabled = busy;
+    shadow.querySelector('#fm-finish-scan').hidden = !review;
+    shadow.querySelector('#fm-finish-scan').disabled = busy;
+    if (session.mode === 'scan' && session.scanReview === 'capacity') resume.disabled = true;
+    const p = session.scanProgress;
+    shadow.querySelector('.scan-progress').textContent = session.mode === 'scan' && p ? `List scroll: ${Math.round(p.scrollTop)} / ${Math.max(0, Math.round(p.scrollHeight - p.viewportHeight))}px · ${p.atBottom ? 'at the currently loaded bottom' : 'more scroll space remains'}${p.loading ? ' · loading indicator visible' : ''}. ${session.scanRetriesRemaining || 0} auto retries remaining.` : '';
     const log = shadow.querySelector('.log'); log.replaceChildren(...session.results.slice(-8).reverse().map((r) => el('p', `@${r.username}: ${r.outcome}${r.detail ? ` — ${r.detail}` : ''}`)));
   }
   function signedInAccount() {
@@ -135,7 +153,7 @@
   new MutationObserver(() => { cardsDirty = true; }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
   function cells() {
     if (cardsDirty) {
-      cardList = [...document.querySelectorAll('[data-testid="UserCell"]')].filter((c) => !host?.contains(c));
+      cardList = readers.listCells().filter((c) => !host?.contains(c));
       cardIndex = new Map(cardList.map((c) => [usernameOf(c), c])); cardsDirty = false;
     }
     return cardList;
@@ -185,7 +203,7 @@
     await guard(); cells();
     const current = cardIndex.get(target.username);
     if (current?.isConnected) return current;
-    countdown = `Checking the next list window for @${target.username}…`; render(); scrollBy(0, 640); await wait(800);
+    countdown = `Checking the next list window for @${target.username}…`; render(); readers.scrollList(640); await wait(800);
     await guard(); countdown = ''; cells();
     const next = cardIndex.get(target.username);
     return next?.isConnected ? next : null;
@@ -326,7 +344,7 @@
   }
   async function scan() {
     session.records.forEach((r) => seen.set(r.username, r));
-    let idle = 0, last = -1;
+    let idle = 0, last = -1, lastScrollTop = -1;
     for (let pass = 0; pass < 500; pass++) {
       await guard();
       const changes = [];
@@ -336,12 +354,27 @@
         const { observedAt: previousTime, ...oldFields } = previous || {};
         if (JSON.stringify(fields) !== JSON.stringify(oldFields)) { seen.set(row.username, row); changes.push(row); }
       }
-      idle = seen.size === last ? idle + 1 : 0; last = seen.size;
-      await message('update', { recordChanges: changes, message: `${seen.size} observed accounts. Save as partial unless you independently verify full coverage.` });
-      if (idle >= 8 || seen.size >= 10000) { await message('update', { status: 'complete', message: seen.size >= 10000 ? 'Collection cap reached. This list is partial.' : 'No more cards observed. This does not prove full-list coverage. Return to the dashboard to save.' }); return; }
-      scrollBy(0, 640); await wait(1000);
+      const state = readers.listState();
+      // Reading all currently mounted cards can discover a whole page at once.
+      // Moving toward its bottom is progress even before the next page arrives.
+      idle = seen.size !== last || state.scrollTop > lastScrollTop + 1 ? 0 : idle + 1;
+      last = seen.size; lastScrollTop = state.scrollTop;
+      await message('update', { recordChanges: changes, scanProgress: state, message: `${seen.size} observed accounts. Reading rendered list cards; coverage is not yet verified.` });
+      if (seen.size >= 10000) {
+        await message('update', { status: 'paused', scanReview: 'capacity', message: 'Collection capacity reached. Review and finish this partial observation; full coverage is not established.' }); return;
+      }
+      if (idle >= 8) {
+        if (session.scanRetriesRemaining > 0) {
+          const attempt = 4 - session.scanRetriesRemaining, delay = 1000 * 2 ** attempt;
+          await message('update', { retryUsed: true, message: `Loading retry ${attempt}/3: waiting ${delay / 1000}s before another list scroll. Restrictions still pause immediately.` });
+          for (let elapsed = 0; elapsed < delay; elapsed += 500) { await wait(500); await guard(); }
+          readers.scrollList(640); idle = 0; continue;
+        }
+        await message('update', { status: 'paused', scanReview: 'stalled', message: 'No new accounts arrived after repeated checks. This may be a loading stall, not the end. Inspect the list, Resume, Auto Retry, or finish after review.' }); return;
+      }
+      readers.scrollList(640); await wait(state.loading ? 1500 : 1000);
     }
-    await pause('Scan time bound reached. Save the partial observation or resume.');
+    await message('update', { status: 'paused', scanReview: 'time-bound', message: 'Scan time bound reached. Review progress, then Resume or finish this partial observation.' });
   }
   async function inspect() {
     await guard(); const target = session.queue[session.index];
