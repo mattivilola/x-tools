@@ -9,6 +9,20 @@
   const terminal = new Set(['complete', 'stopped', 'error']);
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const handle = (value) => String(value || '').replace(/^@/, '').toLowerCase();
+  function durationLabel(seconds) {
+    const rounded = Math.ceil(Math.max(0, seconds));
+    const minutes = Math.floor(rounded / 60), rest = rounded % 60;
+    return minutes ? `${minutes}m${rest ? ` ${rest}s` : ''}` : `${rest}s`;
+  }
+  function countdownEstimate(count) {
+    const hasRange = Number.isFinite(session.delayMinMs) && Number.isFinite(session.delayMaxMs);
+    const minMs = hasRange ? session.delayMinMs : (Number(session.delayMs) || 6000);
+    const maxMs = hasRange ? session.delayMaxMs : minMs;
+    const minSeconds = Math.ceil(count * minMs / 1000), maxSeconds = Math.ceil(count * maxMs / 1000);
+    if (minMs === maxMs) return durationLabel(minSeconds);
+    const expectedSeconds = Math.ceil(count * (minMs + maxMs) / 2000);
+    return `${durationLabel(minSeconds)}–${durationLabel(maxSeconds)} (expected ${durationLabel(expectedSeconds)})`;
+  }
   const pathHandle = (href) => { try { const url = new URL(href, location.href); return url.origin === 'https://x.com' && /^\/[\w]{1,15}\/?$/.test(url.pathname) ? handle(url.pathname.split('/')[1]) : ''; } catch { return ''; } };
   async function message(type, extra = {}) {
     const result = await chrome.runtime.sendMessage({ type: `fm:${type}`, id: session.id, ...extra });
@@ -57,8 +71,8 @@
     shadow.querySelector('.reason').textContent = current?.reasons?.join(' · ') || (session.mode === 'scan' ? 'Collecting observed cards only; coverage needs your review.' : 'Your reviewed selection');
     shadow.querySelector('progress').value = session.mode === 'scan' ? 0 : session.index;
     shadow.querySelector('.progress-text').textContent = session.mode === 'scan' ? `${Math.max(seen.size, session.records.length)} accounts collected` : `${session.index} of ${session.queue.length} processed · ${session.results.filter((r) => r.outcome === 'confirmed').length} confirmed ${session.mode === 'follow' ? 'follows' : 'unfollows'}`;
-    const remaining = Math.max(0, session.queue.length - session.index), seconds = Math.ceil(remaining * session.delayMs / 1000);
-    shadow.querySelector('.estimate').textContent = ['follow', 'cleanup'].includes(session.mode) ? `${session.batchSize === '5' ? 'First 5 test batch · ' : ''}Remaining countdown time: ${Math.floor(seconds / 60)}m ${seconds % 60}s, plus lookup and confirmation. Pauses and browser throttling add time.` : '';
+    const remaining = Math.max(0, session.queue.length - session.index);
+    shadow.querySelector('.estimate').textContent = ['follow', 'cleanup'].includes(session.mode) ? `${session.batchSize === '5' ? 'First 5 test batch · ' : ''}Remaining countdown estimate: ${countdownEstimate(remaining)}, plus lookup and confirmation. Pauses and browser throttling add time.` : '';
     shadow.querySelector('.status').textContent = session.message;
     shadow.querySelector('.timer').textContent = countdown || (pending ? 'An action was submitted; awaiting confirmation.' : '');
     const resume = shadow.querySelector('#fm-resume'); resume.textContent = session.status === 'ready' ? (session.mode === 'follow' ? 'Begin supervised follow back' : session.mode === 'cleanup' ? 'Begin supervised unfollow' : 'Begin reading') : 'Resume';
@@ -72,6 +86,18 @@
     const accounts = new Set(links.map((a) => pathHandle(a.href)).filter(Boolean));
     return accounts.size === 1 ? [...accounts][0] : '';
   }
+  const restrictionNoticePattern = /\b(?:rate[ -]?limit(?:ed|ation|s)?|limit(?:ed|ation|s)?|locked|suspended?|suspension|blocked|restrict(?:ed|ion)?|challenge|verification|verify|unusual activity|automated activity|try again later|unable to (?:follow|unfollow)|cannot (?:follow|unfollow))\b/i;
+  const noticeSelectors = '[role="alert"], [role="status"], [role="alertdialog"], [role="dialog"], [data-testid="toast"], [data-testid*="toast" i], [data-testid*="alert" i]';
+  const challengeSelectors = 'iframe[src*="captcha" i], iframe[src*="challenge" i], [data-testid="ocfEnterTextTextInput"], [data-testid*="challenge" i], [data-testid*="captcha" i], [data-testid="rateLimitExceeded"], [data-testid="suspensionNotice"]';
+  function visible(element) {
+    if (!element?.getClientRects().length) return false;
+    const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility === 'visible' && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+  }
+  function restrictionDetected() {
+    if (document.querySelector(challengeSelectors)) return true;
+    return [...document.querySelectorAll(noticeSelectors)].some((notice) => visible(notice) && restrictionNoticePattern.test(notice.textContent || ''));
+  }
   function assertLocal() {
     if (session.pauseOnFocusLoss !== false && (document.visibilityState !== 'visible' || !document.hasFocus())) throw new Error('Paused: keep the monitor tab visible and focused.');
     if (!host?.isConnected || !host.getClientRects().length) throw new Error('Monitor is no longer visible.');
@@ -80,7 +106,7 @@
     if (signedInAccount() !== session.account) throw new Error('The signed-in account could not be verified or has changed. Stop and check the account shown in X.');
     const expected = session.mode === 'inspect' ? `/${session.queue[session.index]?.username}` : `/${session.account}/${session.mode === 'scan' ? session.direction : session.mode === 'follow' ? 'followers' : 'following'}`;
     if (location.origin !== 'https://x.com' || location.pathname.replace(/\/$/, '').toLowerCase() !== expected.toLowerCase()) throw new Error('The session page changed. Stop and start again from the dashboard.');
-    if (document.querySelector('[data-testid="toast"]')?.textContent?.match(/limit|locked|suspend|try again|error/i) || document.querySelector('iframe[src*="captcha"], [data-testid="ocfEnterTextTextInput"]')) throw new Error('X displayed a restriction or verification request. Session paused.');
+    if (restrictionDetected()) throw new Error('X displayed a limitation, restriction, block, or verification challenge. Session paused.');
   }
   async function guard() {
     if (session.status !== 'running') throw new Error('Session is paused.');
@@ -120,6 +146,21 @@
   function recordOf(cell) {
     return readers.recordOf(cell, session.mode === 'scan' ? session.direction : session.mode === 'follow' ? 'followers' : 'following');
   }
+  function assertTargetIdentity(cell, target) {
+    if (!cell?.isConnected || usernameOf(cell) !== target.username) throw new Error('The target row changed. No action taken.');
+    const record = recordOf(cell);
+    if (!record) throw new Error('The target identity could not be verified. No action taken.');
+    if (target.id && record.id !== target.id) throw new Error('The stable account ID could not be verified. No action taken.');
+    return record;
+  }
+  function relationshipButtons(cell) {
+    return { following: cell.querySelector('[data-testid$="-unfollow"]'), follow: cell.querySelector('[data-testid$="-follow"]') };
+  }
+  async function skipCurrent(detail, isFollowing) {
+    const result = { outcome: 'skipped', detail };
+    if (isFollowing === true || isFollowing === false) result.isFollowing = isFollowing;
+    await message('update', { index: session.index, result });
+  }
   let confirmationFor = null;
   function ownedDialog() {
     if (!confirmationFor) return null;
@@ -129,51 +170,82 @@
   }
   async function countdownBeforeAction() {
     const token = version;
-    for (let left = session.delayMs / 1000; left > 0; left--) {
+    const hasRange = Number.isFinite(session.delayMinMs) && Number.isFinite(session.delayMaxMs);
+    const minSeconds = hasRange ? Math.ceil(session.delayMinMs / 1000) : Math.ceil((Number(session.delayMs) || 6000) / 1000);
+    const maxSeconds = hasRange ? Math.floor(session.delayMaxMs / 1000) : minSeconds;
+    if (maxSeconds < minSeconds) throw new Error('The action countdown range is invalid.');
+    const leftStart = hasRange ? minSeconds + Math.floor(Math.random() * (maxSeconds - minSeconds + 1)) : minSeconds;
+    for (let left = leftStart; left > 0; left--) {
       await guard(); if (token !== version) throw new Error('Paused.');
       countdown = `${session.mode === 'follow' ? 'Following' : 'Unfollowing'} @${session.queue[session.index].username} in ${left}s`; render(); await wait(1000);
     }
     countdown = ''; await guard(); if (token !== version) throw new Error('Paused.');
   }
   async function findTarget(target) {
-    let idle = 0, last = -1, wrapped = false;
-    const discovered = new Set();
-    for (let pass = 0; pass < 180 && idle < 6; pass++) {
-      await guard();
-      cells();
-      const match = cardIndex.get(target.username);
-      if (match?.isConnected) return match;
-      for (const name of cardIndex.keys()) if (name) discovered.add(name);
-      idle = discovered.size === last ? idle + 1 : 0; last = discovered.size;
-      countdown = `Finding @${target.username} in your ${session.mode === 'follow' ? 'followers' : 'following'} list…`; render(); scrollBy(0, 640); await wait(800);
-      if (idle >= 6 && !wrapped) { scrollTo(0, 0); idle = 0; last = -1; discovered.clear(); wrapped = true; }
-    }
-    throw new Error(`@${target.username} could not be located reliably. No action was taken; check the list and start a new selection.`);
+    await guard(); cells();
+    const current = cardIndex.get(target.username);
+    if (current?.isConnected) return current;
+    countdown = `Checking the next list window for @${target.username}…`; render(); scrollBy(0, 640); await wait(800);
+    await guard(); countdown = ''; cells();
+    const next = cardIndex.get(target.username);
+    return next?.isConnected ? next : null;
   }
   async function cleanup() {
     while (session.status === 'running' && session.index < session.queue.length) {
       const target = session.queue[session.index]; await message('update', { current: target });
-      const cell = await findTarget(target); cell.scrollIntoView({ block: 'center' });
-      await countdownBeforeAction();
-      if (!cell.isConnected || usernameOf(cell) !== target.username) throw new Error('The target row changed during the countdown. No action taken.');
-      const record = recordOf(cell);
-      if (target.id && record.id !== target.id) throw new Error('The stable account ID could not be verified. No action taken.');
+      const cell = await findTarget(target);
+      if (!cell) { await skipCurrent('Not found in this list window; relationship unknown.'); continue; }
+      cell.scrollIntoView({ block: 'center' });
+      let record = assertTargetIdentity(cell, target);
       if (record.protected) throw new Error('The account is now protected. No action taken.');
+      let buttons = relationshipButtons(cell);
+      if (record.isFollowing === false && buttons.follow && !buttons.following) {
+        await skipCurrent('Already not following.', false); continue;
+      }
+      if (record.isFollowing !== true || !buttons.following || buttons.follow) throw new Error('The current following state could not be verified. No action taken.');
       const preserveVerified = session.action === 'unfollow-unverified-nonfollowers';
       if (preserveVerified && (record.verified !== false || record.followsYou !== false)) {
-        await message('update', { index: session.index, result: { outcome: 'skipped', detail: 'Verified, follows you, or relationship evidence unavailable. No unfollow submitted.' } });
+        await skipCurrent('Verified, follows you, or relationship evidence unavailable. No unfollow submitted.');
         continue;
       }
       const reciprocalReason = session.action === 'unfollow-nonfollowers' || preserveVerified || target.reasons.some((r) => /No longer observed|Does not appear among/i.test(r));
       if (reciprocalReason && readers.followsYou(cell)) {
-        await message('update', { index: session.index, result: { outcome: 'skipped', detail: 'X now shows this account follows you. No unfollow submitted.' } });
+        await skipCurrent('X now shows this account follows you. No unfollow submitted.');
         continue;
       }
-      const button = cell.querySelector('[data-testid$="-unfollow"]');
+      await countdownBeforeAction();
+      record = assertTargetIdentity(cell, target);
+      if (record.protected) throw new Error('The account is now protected. No action taken.');
+      buttons = relationshipButtons(cell);
+      if (record.isFollowing === false && buttons.follow && !buttons.following) {
+        await skipCurrent('Already not following.', false); continue;
+      }
+      if (record.isFollowing !== true || !buttons.following || buttons.follow) throw new Error('The current following state could not be verified. No action taken.');
+      if (preserveVerified && (record.verified !== false || record.followsYou !== false)) {
+        await skipCurrent('Verified, follows you, or relationship evidence unavailable. No unfollow submitted.');
+        continue;
+      }
+      if (reciprocalReason && readers.followsYou(cell)) {
+        await skipCurrent('X now shows this account follows you. No unfollow submitted.');
+        continue;
+      }
+      const button = buttons.following;
       if (!button || button.disabled) throw new Error('A unique Following button could not be verified. No action taken.');
       if (document.querySelector('[data-testid="confirmationSheetConfirm"]')) throw new Error('Another confirmation is open. Close it and resume.');
       await guard();
-      if (!cell.isConnected || usernameOf(cell) !== target.username || !cell.contains(button)) throw new Error('Target changed before opening confirmation.');
+      record = assertTargetIdentity(cell, target);
+      if (record.protected) throw new Error('The account is now protected. No action taken.');
+      buttons = relationshipButtons(cell);
+      if (record.isFollowing === false && buttons.follow && !buttons.following) {
+        await skipCurrent('Already not following.', false); continue;
+      }
+      if (record.isFollowing !== true || !buttons.following || buttons.follow || !cell.contains(button)) throw new Error('Target changed before opening confirmation.');
+      if (preserveVerified && (record.verified !== false || record.followsYou !== false)) {
+        await skipCurrent('Verified, follows you, or relationship evidence unavailable. No unfollow submitted.'); continue;
+      }
+      if (reciprocalReason && readers.followsYou(cell)) {
+        await skipCurrent('X now shows this account follows you. No unfollow submitted.'); continue;
+      }
       confirmationFor = target.username; button.click();
       let dialog;
       for (let n = 0; n < 25; n++) { await wait(100); if (session.status !== 'running') throw new Error('Paused before confirmation.'); dialog = ownedDialog(); if (dialog) break; }
@@ -181,15 +253,18 @@
       await guard();
       const confirm = dialog.querySelector('[data-testid="confirmationSheetConfirm"]');
       if (!ownedDialog() || confirm.disabled || !confirm.isConnected) throw new Error('The confirmation changed. No action taken.');
-      if (preserveVerified) {
-        if (!cell.isConnected || usernameOf(cell) !== target.username) throw new Error('The target changed before confirmation. No unfollow submitted.');
-        const latest = recordOf(cell);
-        if (target.id && latest.id !== target.id) throw new Error('The target identity changed before confirmation.');
-        if (latest.verified !== false || latest.followsYou !== false || latest.protected) {
-          ownedDialog().querySelector('[data-testid="confirmationSheetCancel"]')?.click(); confirmationFor = null;
-          await message('update', { index: session.index, result: { outcome: 'skipped', detail: 'Account protection changed before confirmation. No unfollow submitted.' } });
-          continue;
-        }
+      record = assertTargetIdentity(cell, target);
+      if (record.protected) throw new Error('The account is now protected. No unfollow submitted.');
+      buttons = relationshipButtons(cell);
+      if (record.isFollowing === false && buttons.follow && !buttons.following) {
+        ownedDialog().querySelector('[data-testid="confirmationSheetCancel"]')?.click(); confirmationFor = null;
+        await skipCurrent('Already not following.', false); continue;
+      }
+      if (record.isFollowing !== true || !buttons.following || buttons.follow) throw new Error('The following state changed before confirmation. No unfollow submitted.');
+      if ((preserveVerified && (record.verified !== false || record.followsYou !== false)) || (reciprocalReason && readers.followsYou(cell))) {
+        ownedDialog().querySelector('[data-testid="confirmationSheetCancel"]')?.click(); confirmationFor = null;
+        await skipCurrent(preserveVerified ? 'Verified, follows you, or relationship evidence unavailable. No unfollow submitted.' : 'X now shows this account follows you. No unfollow submitted.');
+        continue;
       }
       const index = session.index; pending = true; render(); confirm.click();
       // No more destructive clicks until a rendered result is positively observed.
@@ -209,19 +284,33 @@
   async function followBack() {
     while (session.status === 'running' && session.index < session.queue.length) {
       const target = session.queue[session.index]; await message('update', { current: target });
-      const cell = await findTarget(target); cell.scrollIntoView({ block: 'center' });
+      const cell = await findTarget(target);
+      if (!cell) { await skipCurrent('Not found in this list window; relationship unknown.'); continue; }
+      cell.scrollIntoView({ block: 'center' });
+      let record = assertTargetIdentity(cell, target);
+      if (record.protected) { await skipCurrent('Private account excluded.'); continue; }
+      if (record.isFollowing === true) { await skipCurrent('Already following.', true); continue; }
+      if (target.requireVerified && !record.verified) { await skipCurrent('No verified badge currently observed.'); continue; }
+      let buttons = relationshipButtons(cell);
+      if (record.isFollowing !== false || !buttons.follow || buttons.following) throw new Error('The current following state could not be verified. No follow submitted.');
       await countdownBeforeAction();
-      if (!cell.isConnected || usernameOf(cell) !== target.username) throw new Error('The target row changed. No follow submitted.');
-      const record = recordOf(cell);
-      if (target.id && record.id !== target.id) throw new Error('The account ID could not be verified. No follow submitted.');
-      if (record.protected || record.isFollowing || (target.requireVerified && !record.verified)) {
-        await message('update', { index: session.index, result: { outcome: 'skipped', detail: record.protected ? 'Private account excluded.' : record.isFollowing ? 'Already following.' : 'No verified badge currently observed.' } }); continue;
-      }
-      const button = cell.querySelector('[data-testid$="-follow"]');
-      if (!button || button.disabled || cell.querySelector('[data-testid$="-unfollow"]')) throw new Error('A unique Follow button could not be verified.');
+      record = assertTargetIdentity(cell, target);
+      if (record.protected) { await skipCurrent('Private account excluded.'); continue; }
+      if (record.isFollowing === true) { await skipCurrent('Already following.', true); continue; }
+      if (target.requireVerified && !record.verified) { await skipCurrent('No verified badge currently observed.'); continue; }
+      buttons = relationshipButtons(cell);
+      if (record.isFollowing !== false || !buttons.follow || buttons.following) throw new Error('The current following state could not be verified. No follow submitted.');
+      if (buttons.follow.disabled) throw new Error('A unique Follow button could not be verified.');
       if (document.querySelector('[data-testid="confirmationSheetConfirm"]')) throw new Error('Another confirmation is open. No follow submitted.');
       await guard();
-      if (!cell.isConnected || usernameOf(cell) !== target.username || !cell.contains(button) || (target.requireVerified && !readers.verifiedOf(cell))) throw new Error('The target changed before the follow.');
+      record = assertTargetIdentity(cell, target);
+      if (record.protected) { await skipCurrent('Private account excluded.'); continue; }
+      if (record.isFollowing === true) { await skipCurrent('Already following.', true); continue; }
+      if (target.requireVerified && !record.verified) { await skipCurrent('No verified badge currently observed.'); continue; }
+      buttons = relationshipButtons(cell);
+      if (record.isFollowing !== false || !buttons.follow || buttons.following || buttons.follow.disabled || !cell.contains(buttons.follow)) throw new Error('The target changed before the follow.');
+      const button = buttons.follow;
+      if (document.querySelector('[data-testid="confirmationSheetConfirm"]')) throw new Error('Another confirmation is open. No follow submitted.');
       const index = session.index; pending = true; render(); button.click();
       let confirmed = false;
       for (let n = 0; n < 60; n++) {

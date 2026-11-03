@@ -9,7 +9,7 @@ Open source tools for creating with your X (Twitter) community. Each tool lives 
 | Tool | Purpose | Status |
 | --- | --- | --- |
 | [Followers Hero](./followers-hero-image/) | Turn community avatars into customizable celebration posters. Includes an offline editor and a supervised website collector with explicit risk acknowledgement. | Experimental v0.1.0 |
-| [Followers Manager](./followers-manager/) | Track follower history, review follow-back/unfollow selections and control sessions with a live overlay and optional focus pausing. Written-authorized website use only. | Experimental v0.4.0 |
+| [Followers Manager](./followers-manager/) | Track follower history, review follow-back/unfollow selections and control sessions with a live overlay and optional focus pausing. Written-authorized website use only. | Experimental v0.5.0 |
 | [API Followers Management](./api-followers-management/) | Separate proposed API edition for follower tracking and permitted account management. | Feasibility research |
 | API Followers Hero Image | A separate future tool using the official X API, subject to access, terms and export-rights review. | [Exploration plan](./docs/api-followers-hero-image-plan.md) |
 

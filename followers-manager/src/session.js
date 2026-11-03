@@ -1,5 +1,5 @@
 import { normalizeHandle } from './core.js';
-import { actionBatch, ACTION_DELAY_MS } from './performance.js';
+import { actionBatch, ACTION_DELAY_MS, ACTION_DELAY_MIN_MS, ACTION_DELAY_MAX_MS } from './performance.js';
 
 export const TERMINAL = new Set(['complete', 'stopped', 'error']);
 export const MAX_QUEUE = 10000;
@@ -26,7 +26,8 @@ export function makeSession(input) {
   const action = ['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-unverified-nonfollowers', 'unfollow-all'].includes(input.action) ? input.action : null;
   return { id: crypto.randomUUID(), account, mode: input.mode, action, batchSize: input.batchSize || 'all', pauseOnFocusLoss: input.pauseOnFocusLoss !== false, direction: input.direction === 'following' ? 'following' : 'followers',
     queue, status: 'ready', index: 0, current: null, results: [], records: [], message: 'Ready. Begin from the live monitor.',
-    authorization: 'written-permission', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), delayMs: ACTION_DELAY_MS, tabId: null };
+    authorization: 'written-permission', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    delayMs: ACTION_DELAY_MS, delayMinMs: ACTION_DELAY_MIN_MS, delayMaxMs: ACTION_DELAY_MAX_MS, tabId: null };
 }
 export function sessionPath(session) {
   if (session.mode === 'inspect') return `/${session.queue[session.index]?.username || session.account}`;

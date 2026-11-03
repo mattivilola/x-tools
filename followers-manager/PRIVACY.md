@@ -1,6 +1,6 @@
 # Followers Manager privacy
 
-Version 0.4.0 · 2026-11-03
+Version 0.5.0 · 2026-11-03
 
 Follower/following snapshots, profile observations, keep-list entries, and the latest session state/outcomes are saved in `chrome.storage.local` on this device. This is browser extension storage, not an encrypted vault. There is no developer backend, analytics, cloud sync, remote font or remote image loading.
 
@@ -15,3 +15,5 @@ Use Clear local history to remove local history/keep entries and session state a
 Running scan observations are buffered locally between approximately five-second durable checkpoints, with immediate checkpoints on Pause, Stop and completion. An abrupt shutdown may lose the buffered observations; no data is sent to a server. First-five batches use the same reviewed local records and permissions as full selections.
 
 Completion stores results locally, activates or reopens the extension dashboard and closes only its owned processing tab when its URL still matches. Session state includes the originating dashboard tab ID, completion time and whether a scan was saved; no new permissions or external destinations are added.
+
+Current relationship observations are stored separately as `fmRelationships`, scoped to your account and the target identity, with observed time and confirmed/observed source. This lets later selections account for completed actions without rewriting historical snapshots. They remain local, are included in backups, merge on restore and are removed by Clear local history. The most recent available session log can restore pre-update observations; missing or uncertain targets are not labeled as unfollowers.

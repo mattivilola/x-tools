@@ -200,12 +200,13 @@ function fixture(path) {
     await app.bringToFront(); await app.locator('#follow-all').click(); await app.locator('#authorization').check(); await app.locator('#accept').check();
     const allPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const all = await allPromise;
     await all.goto('https://x.com/fixture/followers'); await all.bringToFront(); await all.locator('#fm-resume').waitFor();
-    await all.evaluate(() => { const button = document.querySelector('[data-testid="101-follow"]'); button.dataset.testid='101-unfollow'; button.textContent='Following'; });
+    await all.evaluate(() => { const button = document.querySelector('[data-testid="102-follow"]'); button.dataset.testid='102-unfollow'; button.textContent='Following'; });
     await all.locator('#fm-resume').click(); await completeAndReturn(all, 27000);
     const allResult = await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession);
-    assert.equal(allResult.results[0].outcome, 'skipped'); assert.equal(allResult.results[1].username, 'bruno'); assert.equal(allResult.results[1].outcome, 'confirmed');
-    assert.equal(countActions(all, 'follow'), 1); assert.equal(countActions(all, 'unfollow'), 0);
-    check('all-follower follow back includes unverified followers and skips accounts already followed at execution time');
+    assert.equal(allResult.queue.length, 1); assert.equal(allResult.queue[0].username, 'bruno');
+    assert.equal(allResult.results[0].outcome, 'skipped'); assert.equal(allResult.results[0].detail, 'Already following.');
+    assert.equal(countActions(all, 'follow'), 0); assert.equal(countActions(all, 'unfollow'), 0);
+    check('confirmed prior follows are excluded, and newly observed already-followed accounts skip without a countdown');
 
     await app.bringToFront();
     const batchFollowers = Array.from({ length: 7 }, (_, i) => ({ username: `batch${i + 1}`, id: String(201 + i), verified: true, bio: 'Synthetic batch profile' }));
@@ -234,7 +235,7 @@ function fixture(path) {
       await app.locator(`#${action}`).click(); await app.locator('#batch-size').selectOption('5');
       assert.match(await app.locator('#consent-description').textContent(), /5 selected accounts/);
       assert.equal(await app.locator('#consent-list li').count(), 5);
-      assert.match(await app.locator('#duration-estimate').textContent(), /40s/);
+      assert.match(await app.locator('#duration-estimate').textContent(), /15s–45s \(expected 30s\)/);
       await app.locator('#consent').getByRole('button', { name: 'Cancel', exact: true }).click();
     }
     // Seven eligible synthetic followers, but only the reviewed first five may act.
@@ -252,6 +253,26 @@ function fixture(path) {
     assert.deepEqual(actions.get(batch).map((r) => r.name), ['batch1', 'batch2', 'batch3', 'batch4', 'batch5']);
     await app.waitForTimeout(9000); assert.equal(countActions(batch, 'follow'), 5);
     check('first-five verified follow batch confirms five real fixture actions, completes and never follows the remaining two');
+
+    await app.locator('#follow-verified').click();
+    assert.equal(await app.locator('#consent-list li').count(), 2, 'the full batch excludes all five confirmed test targets');
+    assert.doesNotMatch(await app.locator('#consent-list').textContent(), /@batch[1-5]\b/);
+    await app.locator('#authorization').check(); await app.locator('#accept').check();
+    const partialPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const partial = await partialPromise;
+    await partial.goto('https://x.com/fixture/followers'); await partial.bringToFront(); await partial.locator('#fm-resume').click();
+    await partial.locator('.progress-text').filter({ hasText: '1 of 2 processed' }).waitFor({ timeout: 16000 });
+    await partial.locator('#fm-stop').click();
+    assert.equal(countActions(partial, 'follow'), 1);
+    await app.bringToFront(); await app.reload();
+    await app.waitForFunction(() => document.getElementById('action-summary').textContent.includes('observed followers'));
+    await app.locator('#follow-verified').click();
+    assert.equal(await app.locator('#consent-list li').count(), 1);
+    assert.match(await app.locator('#consent-list').textContent(), /@batch7/);
+    await app.locator('#consent').getByRole('button', { name: 'Cancel', exact: true }).click();
+    const retained = await worker.evaluate(async () => chrome.storage.local.get(['fmData', 'fmRelationships']));
+    assert.equal(retained.fmRelationships.filter((r) => /^batch/.test(r.username) && r.isFollowing).length, 6);
+    assert.equal(retained.fmData.snapshots.at(-1).following.length, 123, 'historical snapshots are not rewritten by current action status');
+    check('first-five results and partial stopped results immediately persist across reloads and reduce the next full queue');
 
     const freshAt = new Date().toISOString();
     const protectedData = { account: 'fixture', observedAt: freshAt, source: 'synthetic-fixture', coverage: 'partial',
@@ -278,6 +299,42 @@ function fixture(path) {
     assert.deepEqual(protectedResult.results.map((r) => [r.username, r.outcome]), [['bruno', 'confirmed'], ['carl', 'skipped'], ['dora', 'skipped']]);
     assert.deepEqual(actions.get(protectedRun), [{ kind: 'unfollow', name: 'bruno' }]);
     check('keep-verified-and-followers action excludes protected groups and cancels when a badge or follower relationship changes before confirmation');
+
+    const missingData = { account: 'fixture', observedAt: new Date().toISOString(), source: 'synthetic-fixture', coverage: 'partial',
+      followers: [{ username: 'ghost', id: '301', verified: true, isFollowing: false }], following: [] };
+    await app.locator('.import-menu summary').click();
+    await app.locator('#import').setInputFiles({ name: 'missing.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(missingData)) });
+    await app.waitForFunction(() => document.getElementById('import').value === ''); await app.locator('.import-menu summary').click();
+    await app.locator('#follow-verified').click(); await app.locator('#authorization').check(); await app.locator('#accept').check();
+    const missingPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const missing = await missingPromise;
+    await missing.goto('https://x.com/fixture/followers'); await missing.bringToFront(); await missing.locator('#fm-resume').click();
+    await completeAndReturn(missing, 7000);
+    const missingResult = await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession);
+    assert.equal(missingResult.results[0].outcome, 'skipped'); assert.match(missingResult.results[0].detail, /relationship unknown/);
+    assert.equal((await worker.evaluate(async () => (await chrome.storage.local.get('fmRelationships')).fmRelationships)).some((r) => r.username === 'ghost'), false);
+    check('a missing target is skipped after one look-ahead without recording an invented unfollow or relationship');
+
+    const warningHtml = '<!doctype html><title>Restriction fixture</title><a data-testid="AppTabBar_Profile_Link" href="/fixture">Your profile</a><div data-testid="UserCell"><a href="/ghost">Ghost<svg aria-label="Verified account"></svg></a><button data-testid="301-follow" onclick="window.recordFixtureAction(\'follow\',\'ghost\')">Follow back</button></div>';
+    await context.route('https://x.com/**', (route) => route.fulfill({ contentType: 'text/html', body: warningHtml }));
+    await app.locator('#follow-verified').click(); await app.locator('#authorization').check(); await app.locator('#accept').check();
+    const warningPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const warning = await warningPromise;
+    await warning.goto('https://x.com/fixture/followers'); await warning.bringToFront(); await warning.locator('#fm-resume').click();
+    await warning.locator('.timer').filter({ hasText: /Following @ghost/ }).waitFor();
+    await warning.evaluate(() => { const alert = document.createElement('div'); alert.setAttribute('role', 'alert'); alert.textContent = 'You are unable to follow more people at this time. Try again later.'; document.body.append(alert); });
+    await warning.locator('.badge').filter({ hasText: 'paused' }).waitFor({ timeout: 2500 });
+    assert.equal(countActions(warning, 'follow'), 0);
+    await warning.locator('#fm-stop').click();
+    check('a visible follow limitation appearing during the randomized countdown pauses before any follow click');
+    await app.bringToFront();
+    await app.locator('#follow-verified').click(); await app.locator('#authorization').check(); await app.locator('#accept').check();
+    const challengePromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const challenge = await challengePromise;
+    await challenge.goto('https://x.com/fixture/followers'); await challenge.bringToFront();
+    await challenge.evaluate(() => { const input = document.createElement('input'); input.dataset.testid = 'ocfEnterTextTextInput'; document.body.append(input); });
+    await challenge.locator('#fm-resume').click(); await challenge.locator('.badge').filter({ hasText: 'paused' }).waitFor();
+    assert.equal(countActions(challenge, 'follow'), 0); await challenge.locator('#fm-stop').click();
+    check('a challenge prevents Begin without attempting to solve or bypass it');
+    await app.bringToFront();
+    await context.route('https://x.com/**', (route) => route.fulfill({ contentType: 'text/html', body: protectedHtml }));
 
     await app.locator('#scan-following').click(); await app.locator('#pause-focus').uncheck();
     await app.locator('#authorization').check(); await app.locator('#accept').check();

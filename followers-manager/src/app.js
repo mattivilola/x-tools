@@ -1,12 +1,14 @@
 import { normalizeHandle, normalizeSnapshot, parseImport, compareSnapshots, buildReview, buildActionQueue, exportCsv, DEMO_SNAPSHOTS } from './core.js';
 import { MAX_QUEUE, isKept } from './session.js';
 import { PAGE_SIZE, actionBatch, minimumDuration } from './performance.js';
+import { applyRelationships, normalizeRelationships } from './relationships.js';
 const $ = (id) => document.getElementById(id);
 const cleanData = () => ({ version: 1, snapshots: [], keepList: [] });
 const actionIds = ['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-unverified-nonfollowers', 'unfollow-all'];
 let data = cleanData(), session = null, rows = [], selected = new Set(), demo = false, currentAccount = '', prepared = null;
 let page = 0, logSession = '', logCount = 0;
 let completionShown = '';
+let relationships = [];
 const rowNodes = new Map();
 const text = (tag, value, cls) => { const node = document.createElement(tag); node.textContent = value; if (cls) node.className = cls; return node; };
 const date = (value) => new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -20,6 +22,7 @@ async function command(type, extra = {}) {
 const attempt = (fn) => async (...args) => { try { await fn(...args); } catch (error) { announce(error.message, true); } };
 function snapshots() { return data.snapshots.filter((s) => s.account === currentAccount).sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt)); }
 function latest() { return snapshots().at(-1); }
+function currentView() { return demo ? latest() : applyRelationships(latest(), relationships); }
 function previous() { const all = snapshots(); return all.slice(0, -1).reverse().find((s) => s.coverage === 'complete') || all.at(-2); }
 function account() { const value = normalizeHandle($('account').value); if (demo || value === 'demo') throw new Error('Demo data cannot start a live session. Leave the demo and use your own X handle.'); return value; }
 function addSnapshot(snapshot) {
@@ -31,16 +34,17 @@ function addSnapshot(snapshot) {
 function render() {
   const points = snapshots(), current = points.at(-1), before = previous();
   const comparison = current && before ? compareSnapshots(before, current) : null;
-  rows = current ? buildReview(current, before, data.keepList) : [];
+  const view = currentView();
+  rows = view ? buildReview(view, before, data.keepList) : [];
   $('total').textContent = current?.followerCount == null ? '—' : current.followerCount.toLocaleString();
-  $('following-total').textContent = current ? `${current.following.length.toLocaleString()}${current.coverage === 'partial' ? ' (partial)' : ''}` : '—';
+  $('following-total').textContent = view ? `${view.following.length.toLocaleString()}${current.coverage === 'partial' ? ' (partial)' : ''}` : '—';
   $('lost-total').textContent = comparison?.comparable ? comparison.lost.length : 'Unknown';
   $('kept-total').textContent = data.keepList.length;
   $('coverage-info').textContent = current ? `Latest observation: ${date(current.observedAt)}. Source: ${current.source}. Coverage: ${current.coverage}. ${current.followers.length} follower records; ${current.following.length} following records.` : 'A first snapshot establishes your baseline. Later complete snapshots can reveal relationship changes.';
   $('comparison-warning').textContent = comparison?.warning || (!before ? 'Tracking starts with your first baseline. Import or scan a later observation to see changes.' : '');
   renderChart(points); renderRows(); renderSnapshots(); renderSession();
   updateSessionButtons();
-  $('action-summary').textContent = current ? `${current.followers.length} observed followers; ${current.following.length} observed following. Coverage: ${current.coverage}. Verification and relationship checks are repeated on X before each action.` : 'Scan or import your lists to prepare an action selection.';
+  $('action-summary').textContent = current ? `${view.followers.length} observed followers; ${view.following.length} following in the local status view. Coverage: ${current.coverage}. Confirmed actions and observed relationship states update immediately; historical snapshots stay unchanged. Live checks run before each action.` : 'Scan or import your lists to prepare an action selection.';
 }
 function renderChart(points) {
   const window = Number($('window').value), cutoff = window ? Date.now() - window * 86400000 : 0;
@@ -143,7 +147,7 @@ function download(name, content, type) { const blob = new Blob([content], { type
 function queue() {
   // Review sorting is for people; execution follows the observed list order so
   // the runner can continue down the list rather than wrap for each suggestion.
-  const order = new Map((latest()?.following || []).map((r, index) => [r.username, index]));
+  const order = new Map((currentView()?.following || []).map((r, index) => [r.username, index]));
   return rows.filter((r) => selected.has(r.username) && r.canSelect && !isKept(r, data.keepList)).sort((a, b) => (order.get(a.username) ?? Infinity) - (order.get(b.username) ?? Infinity));
 }
 async function start(mode, direction, plan = prepared) {
@@ -160,7 +164,7 @@ function prepareStart(mode, direction, action = null) {
   let selection = mode === 'scan' ? [] : queue(), warning = '';
   if (action) {
     if (!latest()) throw new Error('Scan or import your lists first.');
-    const result = buildActionQueue(latest(), action, data.keepList); selection = result.queue; warning = `${result.excluded} excluded. ${result.warning}`;
+    const result = buildActionQueue(currentView(), action, data.keepList); selection = result.queue; warning = `${result.excluded} excluded. ${result.warning}`;
   }
   if (mode !== 'scan' && !selection.length) throw new Error(`No eligible accounts for this action. ${warning}`);
   prepared = { mode, direction, action, account: own, all: structuredClone(selection), queue: [], batchSize: 'all' };
@@ -178,7 +182,7 @@ function renderPrepared() {
   prepared.batchSize = $('batch-size').value;
   const selection = prepared.queue = actionBatch(prepared.all, prepared.batchSize);
   $('consent-description').textContent = ['cleanup','follow'].includes(mode) ? `The extension will ${mode === 'follow' ? 'follow back' : 'unfollow'} ${selection.length} selected accounts, one at a time.${prepared.batchSize === '5' ? ' First 5 test: this session stops after this batch. This performs real account actions.' : ''} Review this fixed selection and monitor its progress.` : 'The extension will read rendered X pages. This session will not follow or unfollow anyone.';
-  $('duration-estimate').textContent = ['cleanup','follow'].includes(mode) ? `Minimum countdown time: ${minimumDuration(selection.length)}. Finding accounts, confirming results, pauses and background throttling add time.` : '';
+  $('duration-estimate').textContent = ['cleanup','follow'].includes(mode) ? `Countdown estimate: ${minimumDuration(selection.length)}. Finding accounts, confirming results, pauses and background throttling add time.` : '';
   $('consent-list').replaceChildren(...selection.slice(0, 500).map((r) => text('li', `@${r.username} — ${r.reasons?.join('; ') || 'Selected by you'}`)));
   if (selection.length > 500) $('consent-list').append(text('li', `${selection.length - 500} more accounts in this fixed selection. Export review data or narrow your selection to inspect individuals.`));
 }
@@ -270,7 +274,7 @@ $('import').addEventListener('change', attempt(async (event) => {
   }
   const added = addSnapshot(snapshot); currentAccount = own; await persist(); selected.clear(); render(); announce(added ? 'Snapshot imported. Archive lists default to partial; review the coverage notes.' : 'This snapshot is already saved.'); event.target.value = '';
 }));
-$('backup').addEventListener('click', () => download('followers-manager-backup.json', JSON.stringify(data, null, 2), 'application/json'));
+$('backup').addEventListener('click', () => download('followers-manager-backup.json', JSON.stringify({ ...data, relationships: demo ? [] : relationships }, null, 2), 'application/json'));
 $('csv').addEventListener('click', () => download('following-review.csv', exportCsv(rows), 'text/csv'));
 $('restore').addEventListener('change', attempt(async (event) => {
   const file = event.target.files[0]; if (!file) return;
@@ -279,21 +283,26 @@ $('restore').addEventListener('change', attempt(async (event) => {
   const backup = JSON.parse(await file.text());
   if (backup.version !== 1 || !Array.isArray(backup.snapshots) || backup.snapshots.length > 100 || !Array.isArray(backup.keepList) || backup.keepList.length > 10000) throw new Error('Unsupported backup.');
   const restored = backup.snapshots.map(normalizeSnapshot), keeps = backup.keepList.map((item) => ({ id: item.id && /^\d{1,25}$/.test(String(item.id)) ? String(item.id) : null, username: normalizeHandle(typeof item === 'string' ? item : item.username) }));
+  const restoredRelationships = normalizeRelationships(backup.relationships || []);
   // Merge rather than replace existing history or keep decisions.
   const combined = new Map([...data.snapshots, ...restored].map((s) => [s.id, s]));
   if (combined.size > 100) throw new Error('Restoring would exceed the 100-snapshot local limit.');
+  await command('restore-relationships', { relationships: restoredRelationships });
+  relationships = (await chrome.storage.local.get('fmRelationships')).fmRelationships || [];
   data.snapshots = [...combined.values()]; data.keepList = [...data.keepList, ...keeps]; await persist(); currentAccount = data.snapshots.at(-1)?.account || currentAccount; $('account').value = currentAccount; render(); announce('Backup merged into local history.'); event.target.value = '';
 }));
 $('clear-data').addEventListener('click', attempt(async () => {
   if (demo) throw new Error('Leave demo mode before clearing saved history.');
   if (session && !['complete', 'stopped', 'error'].includes(session.status)) throw new Error('Stop the live session before clearing local history.');
   if (!confirm('Clear saved snapshots, keep list and the latest session log? Export a backup first if you want to retain them. This does not change X.')) return;
-  data = cleanData(); session = null; selected.clear(); await chrome.storage.local.remove(['fmData', 'fmSession']); render(); announce('Local history cleared. Exported files are unchanged.');
+  data = cleanData(); session = null; relationships = []; selected.clear(); await chrome.storage.local.remove(['fmData', 'fmSession', 'fmRelationships']); render(); announce('Local history cleared. Exported files are unchanged.');
 }));
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
+  if (changes.fmRelationships) relationships = changes.fmRelationships.newValue || [];
   if (changes.fmSession) { session = changes.fmSession.newValue || null; renderSession(); showCompletion(); }
   if (changes.fmData && !demo) { data = changes.fmData.newValue || cleanData(); render(); }
+  else if (changes.fmRelationships && !demo) render();
 });
 // Profile inspection enriches the latest record without fabricating missing activity.
 const enriched = new Set();
@@ -306,7 +315,9 @@ async function enrichInspection(s) {
 }
 chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.fmSession?.newValue?.mode === 'inspect') void attempt(() => enrichInspection(changes.fmSession.newValue))(); });
 async function init() {
-  const saved = await chrome.storage.local.get(['fmData', 'fmSession']); data = saved.fmData || cleanData(); session = saved.fmSession || null;
+  const reconciled = await chrome.runtime.sendMessage({ type: 'fm:reconcile' });
+  if (!reconciled?.ok) throw new Error(reconciled?.error || 'Could not recover local relationship status.');
+  const saved = await chrome.storage.local.get(['fmData', 'fmSession', 'fmRelationships']); data = saved.fmData || cleanData(); session = saved.fmSession || null; relationships = saved.fmRelationships || [];
   currentAccount = data.snapshots.at(-1)?.account || session?.account || ''; $('account').value = currentAccount;
   $('observed').value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   render(); showCompletion(); await enrichInspection(session);

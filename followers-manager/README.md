@@ -2,7 +2,7 @@
 
 **Understand your audience. Keep a following list you actually want.**
 
-A local-first Chromium extension for follower history, relationship changes and **reviewed follow-back and unfollow sessions**. Version: **v0.4.0**.
+A local-first Chromium extension for follower history, relationship changes and **reviewed follow-back and unfollow sessions**. Version: **v0.5.0**.
 
 **Made by [Matti Vilola](https://github.com/mattivilola) with ❤️, sponsored and distributed by [ILO Applications SL](https://iloapps.com).**
 
@@ -63,7 +63,15 @@ The **Account actions** panel prepares these fixed selections, then opens the re
 - **Unfollow except verified & my followers:** only observed nonfollowers with fresh explicit unverified evidence (at most seven days old). Keeps verified accounts, known followers, private/kept accounts and unknown/stale verification. Refresh your scans if no eligible records are available. Before the unfollow and again before confirmation, a current verified badge or Follows you indicator causes a skip.
 - **Unfollow all following:** the eligible accounts in your observed following list, including mutuals. Keep-list and known private-account protections still apply.
 
-“All” refers to the saved observed records, not a guarantee that every account on X has been discovered. Legacy scans have unknown verification and relationship fields; rescan before using badge-based shortcuts. The dialog shows the selection count and first 500 targets; **Export selection CSV** contains the full fixed selection. No action starts until consent and the focused monitor's **Begin**. A follow succeeds only when X renders the matching Following button. Unknown results pause instead of retrying.
+“All” refers to the saved observed records, not a guarantee that every account on X has been discovered. Legacy scans have unknown verification and relationship fields; rescan before using badge-based shortcuts. Confirmed and positively observed relationship states are applied to new selections immediately, including after Stop or a first-five batch. The dialog shows the selection count and first 500 targets; **Export selection CSV** contains the full fixed selection. No action starts until consent and the focused monitor's **Begin**. A follow succeeds only when X renders the matching Following button. Unknown results pause instead of retrying.
+
+### Relationship status across batches
+
+Each confirmed follow/unfollow is saved immediately by the extension service worker, even if the dashboard is closed or the session is stopped partway through. A rendered Already following / Already not following state is also saved. Unknown, missing and uncertain outcomes never become relationship facts. Future selections use this current local status; original saved snapshots and chart measurements are preserved. Newer explicit scan evidence overrides older local action observations. The latest existing session log is reconciled on dashboard startup and before replacement, so available pre-update results are retained. Older overwritten logs cannot be reconstructed. Backups include current relationship status; restores merge by identity and observation time.
+
+Target lookup checks the current rendered cards plus one scroll/look-ahead. A missing target is skipped as **Not found in this list window; relationship unknown**. It is not marked as having unfollowed you. This favors bounded processing over a full search and can skip accounts outside that window.
+
+Visible restriction/limit alerts, toasts or dialogs and supported challenge elements pause the process; they are never bypassed or retried automatically. Stop on any notice the detector does not recognize.
 
 ### Returning after completion
 
@@ -73,7 +81,7 @@ Completed scans, follow-back/unfollow batches and final profile inspections retu
 
 In the review dialog, choose **First 5 — test batch (real actions)** under **Batch size** to run only the first five eligible accounts in the preview (or fewer if fewer qualify). This applies to follow-back and unfollow selections. These are real actions, not a simulation. The CSV export matches the chosen batch. The session completes after processing those targets, including skips; it does not refill skipped slots or continue into the full selection. A new session requires a new review and Begin.
 
-The review and live monitor show countdown time: five accounts require at least 40 seconds of countdown. Finding rows, confirming results, pauses and background browser throttling add time. The eight-second countdown is unchanged.
+The review and live monitor show countdown time: five actual actions have 15–45 seconds of countdown, with an expected mean of 30 seconds. Finding rows, confirming results, pauses and background browser throttling add time. Each actual action draws a fresh uniform integer delay from 3–9 seconds (mean six). This is an operator pacing choice, not an X rate limit or a safety/permission guarantee. Already-followed/unfollowed and other skipped targets do not wait for a countdown.
 
 ### Performance and saved progress
 
@@ -91,7 +99,7 @@ This toggle appears in every start dialog, including both scans. It resets to **
 2. Add people you want to retain to **Keep**. Select the exact accounts you want to unfollow. There is no unattended “unfollow whoever leaves” background rule: new detections need a new reviewed session.
 3. Choose **Review supervised unfollow**. Read the fixed account list, acknowledge your required authorization, and accept responsibility and continuous monitoring. Up to 10,000 observed accounts can be selected per session (the import/scan bound); this is **not** a safe daily allowance. Large sessions can take a long time and may be restricted by X.
 4. Choose **Open live monitor**. In the dedicated X following tab, check the signed-in account and choose **Begin supervised unfollow**. Opening the tab alone does not start actions.
-5. **Watch the large overlay continuously.** It shows who is being processed at that moment, why they were selected, an eight-second countdown before the action, progress, and recent outcomes. The extension locates the matching rendered row, checks the account/ID where available, clicks its Following button, and confirms only a dialog naming that handle.
+5. **Watch the large overlay continuously.** It shows who is being processed at that moment, why they were selected, a 3–9 second countdown before each actual action, progress, and recent outcomes. The extension locates the matching rendered row, checks the account/ID where available, clicks its Following button, and confirms only a dialog naming that handle.
 6. Use **Pause** to interrupt the countdown or stop before the next click. Resume is available only in the visible, focused overlay. With **Pause if losing focus** on, changing tabs/windows or hiding the page pauses progress. With it off, the session may continue in a background tab; browsers can throttle its timing. Changed account/route, removed overlay and reloads still pause regardless of this setting.
 7. Use **Stop** to end the session. Closing the monitor stops it; closing its tab stops it too. **An action already submitted to X may still complete.** Neither Pause nor Stop can retract an already sent request, and an unfollow has no guaranteed undo.
 8. Review the result log. A success requires a rendered Follow button for the same account. A missing row, changed markup or ambiguous result is **uncertain**, pauses the run and is not retried automatically. Check the account manually before deciding what to do next.
@@ -139,7 +147,7 @@ npm --prefix followers-manager run check
 npm --prefix followers-manager run package
 ```
 
-Packaging produces `dist/followers-manager-0.4.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
+Packaging produces `dist/followers-manager-0.5.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
 
 Fixtures simulate rendered X pages and a granted site permission in an isolated temporary extension. They do not establish live X compatibility, real provider acceptance, or permission to automate. Do not test against a live account without the required X authorization and account owner's instruction.
 

@@ -362,6 +362,19 @@ test('background service enforces supervised session ownership and terminal-stat
     response = await send({ ...baseStart, action: 'unfollow-unverified-nonfollowers' }, appSender);
     assert.equal(response.ok, true, 'new cleanup action is supported');
     assert.equal((await send({ type: 'fm:update', id: response.session.id, status: 'complete' }, { ...ownedSender, tab: { id: response.session.tabId } })).ok, false, 'unfinished actions cannot claim completion');
+    const stoppedId = response.session.id, stoppedSender = { ...ownedSender, tab: { id: response.session.tabId } };
+    await send({ type: 'fm:stop', id: stoppedId }, appSender);
+    await send({ type: 'fm:update', id: stoppedId, index: 0, result: { outcome: 'confirmed', detail: 'X now displays a Follow button.' } }, stoppedSender);
+    assert.equal(state.storage.fmSession.status, 'stopped');
+    assert.equal(state.storage.fmRelationships.find((r) => r.username === 'alice').isFollowing, false, 'late confirmed results update relationship status after Stop');
+    response = await send({ ...baseStart, mode: 'follow', action: 'follow-all' }, appSender);
+    const immediateId = response.session.id, immediateSender = { ...ownedSender, tab: { id: response.session.tabId } };
+    await send({ type: 'fm:update', id: immediateId, index: 0, result: { outcome: 'confirmed' } }, immediateSender);
+    assert.equal(state.storage.fmRelationships.find((r) => r.username === 'alice').isFollowing, true, 'confirmed status persists before the session completes');
+    await send({ type: 'fm:stop', id: immediateId }, appSender);
+    const evidenceTime = state.storage.fmRelationships[0].observedAt;
+    await send({ type: 'fm:restore-relationships', relationships: [{ account: 'fixture', username: 'alice', id: 'member-1', isFollowing: false, observedAt: '2020-01-01T00:00:00Z' }] }, appSender);
+    assert.equal(state.storage.fmRelationships[0].observedAt, evidenceTime, 'restoring old evidence cannot roll status back');
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     if (previousChrome) Object.defineProperty(globalThis, 'chrome', previousChrome);

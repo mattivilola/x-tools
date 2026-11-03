@@ -1,15 +1,16 @@
 import { makeSession, isKept, sessionPath, assertSessionUrl, TERMINAL } from './session.js';
 import { mergeRecords, checkpointDue } from './performance.js';
+import { mergeRelationships, relationshipsFromSession } from './relationships.js';
 const APP = chrome.runtime.getURL('app.html');
 let chain = Promise.resolve();
 const serial = (task) => { const result = chain.then(task); chain = result.catch(() => {}); return result; };
 let cachedSession, lastCheckpoint = 0, kept;
 const read = async () => cachedSession ??= (await chrome.storage.local.get('fmSession')).fmSession;
 const readKeepList = async () => kept ??= (await chrome.storage.local.get('fmData')).fmData?.keepList || [];
-const write = async (s, checkpoint = true) => {
+const write = async (s, checkpoint = true, extra = {}) => {
   s.updatedAt = new Date().toISOString();
   if (checkpoint) {
-    await chrome.storage.local.set({ fmSession: s });
+    await chrome.storage.local.set({ fmSession: s, ...extra });
     lastCheckpoint = Date.now();
   }
   cachedSession = s;
@@ -18,7 +19,7 @@ const write = async (s, checkpoint = true) => {
 // Progress/guard replies to the monitor omit immutable queues and the growing scan.
 // Boot and durable storage checkpoints still contain the complete resumable session.
 const reply = (s, sender) => {
-  if (!sender.tab || sender.tab.id !== s.tabId) return s;
+  if (!s || !sender.tab || sender.tab.id !== s.tabId) return s;
   const { records, queue, ...progress } = s;
   return { ...progress, recordCount: records.length };
 };
@@ -32,6 +33,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 const isApp = (sender) => sender.id === chrome.runtime.id && sender.url === APP;
+async function relationshipPatch(s) {
+  const changes = relationshipsFromSession(s);
+  if (!changes.length) return {};
+  const { fmRelationships = [] } = await chrome.storage.local.get('fmRelationships');
+  return { fmRelationships: mergeRelationships(fmRelationships, changes) };
+}
 async function focused(s) {
   const tab = await chrome.tabs.get(s.tabId);
   assertSessionUrl(s, tab.url);
@@ -73,10 +80,24 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
   if (!request?.type?.startsWith('fm:')) return;
   serial(async () => {
     if (sender.id !== chrome.runtime.id) throw new Error('Unknown sender.');
+    if (request.type === 'fm:reconcile' || request.type === 'fm:restore-relationships') {
+      if (!isApp(sender)) throw new Error('Manage local status from the dashboard.');
+      const current = await read();
+      const patch = await relationshipPatch(current);
+      if (request.type === 'fm:restore-relationships') {
+        if (current && !TERMINAL.has(current.status)) throw new Error('Stop the session before restoring status.');
+        const stored = patch.fmRelationships || (await chrome.storage.local.get('fmRelationships')).fmRelationships || [];
+        patch.fmRelationships = mergeRelationships(stored, request.relationships || []);
+      }
+      if (Object.keys(patch).length) await chrome.storage.local.set(patch);
+      return current;
+    }
     if (request.type === 'fm:start') {
       if (!isApp(sender)) throw new Error('Start sessions from the dashboard.');
       const old = await read();
       if (old && !TERMINAL.has(old.status)) throw new Error('Stop the existing session first.');
+      const recovered = await relationshipPatch(old);
+      if (Object.keys(recovered).length) await chrome.storage.local.set(recovered);
       const s = makeSession(request);
       if (!await chrome.permissions.contains({ origins: ['https://x.com/*'] })) throw new Error('X site permission has not been granted.');
       const keepList = await readKeepList();
@@ -139,7 +160,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
         patch.results = [...s.results, result]; patch.index = s.index + 1; patch.current = null;
       }
       const next = { ...s, ...patch };
-      const updated = await write(next, s.mode !== 'scan' || checkpointDue(lastCheckpoint, Date.now(), next.status));
+      const relationship = patch.results ? await relationshipPatch({ ...next, results: patch.results.slice(-1) }) : {};
+      const updated = await write(next, s.mode !== 'scan' || checkpointDue(lastCheckpoint, Date.now(), next.status), relationship);
       return updated.status === 'complete' && s.status !== 'complete' ? finish(updated) : updated;
     }
     if (request.type === 'fm:next-profile') {
