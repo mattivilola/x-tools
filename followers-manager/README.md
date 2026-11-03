@@ -2,7 +2,7 @@
 
 **Understand your audience. Keep a following list you actually want.**
 
-A local-first Chromium extension for follower history, relationship changes and **reviewed follow-back and unfollow sessions**. Version: **v0.2.0**.
+A local-first Chromium extension for follower history, relationship changes and **reviewed follow-back and unfollow sessions**. Version: **v0.3.0**.
 
 **Made by [Matti Vilola](https://github.com/mattivilola) with ❤️, sponsored and distributed by [ILO Applications SL](https://iloapps.com).**
 
@@ -64,6 +64,18 @@ The **Account actions** panel prepares these fixed selections, then opens the re
 
 “All” refers to the saved observed records, not a guarantee that every account on X has been discovered. Legacy scans have unknown verification and relationship fields; rescan before using badge-based shortcuts. The dialog shows the selection count and first 500 targets; **Export selection CSV** contains the full fixed selection. No action starts until consent and the focused monitor's **Begin**. A follow succeeds only when X renders the matching Following button. Unknown results pause instead of retrying.
 
+### First 5 test batch and duration
+
+In the review dialog, choose **First 5 — test batch (real actions)** under **Batch size** to run only the first five eligible accounts in the preview (or fewer if fewer qualify). This applies to follow-back and unfollow selections. These are real actions, not a simulation. The CSV export matches the chosen batch. The session completes after processing those targets, including skips; it does not refill skipped slots or continue into the full selection. A new session requires a new review and Begin.
+
+The review and live monitor show countdown time: five accounts require at least 40 seconds of countdown. Finding rows, confirming results, pauses and background browser throttling add time. The eight-second countdown is unchanged.
+
+### Performance and saved progress
+
+Scans send only new or changed rendered records. Durable checkpoints are saved about every five seconds while running, and immediately on Pause, Stop, completion or an error pause. The monitor shows live counts; the dashboard can lag until the next checkpoint. An abrupt browser or extension shutdown can lose observations since the last checkpoint (normally up to five seconds while the runner is active; suspension can extend that interval). Restart never resumes silently.
+
+The following table renders **50 accounts per page**. Search/filter changes return to page one. **Select visible** selects eligible accounts on the current page; selections on other pages remain selected until cleared. Selection changes reuse rows. Session history appends new outcomes rather than rebuilding prior entries. Manual selections execute in saved list order to reduce repeated scrolling, and the runner caches an index of currently rendered cards, invalidating it when the page changes. Identity, live badge/relationship and confirmation checks still run before actions.
+
 ### Pause if losing focus
 
 This toggle appears in every start dialog, including both scans. It resets to **on** for each new session. On: losing tab/window focus or visibility pauses and requires Resume. Off: scans, inspections and selected follow/unfollow execution may continue when hidden. Account/route, keep-list, overlay-presence, restriction and Stop checks still apply. Browser suspension/throttling can delay or interrupt background work; this is not a scheduling service. Keep monitoring progress and remain responsible for the session.
@@ -122,7 +134,7 @@ npm --prefix followers-manager run check
 npm --prefix followers-manager run package
 ```
 
-Packaging produces `dist/followers-manager-0.2.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
+Packaging produces `dist/followers-manager-0.3.0.zip`. The optional fixture-only browser suite is `node followers-manager/scripts/browser-smoke.cjs`; provide `PLAYWRIGHT_MODULE` and a compatible installed `BROWSER_EXECUTABLE` if needed. Run its `--preflight` first. On macOS, browser launches require the approved execution context described in the repository/user instructions.
 
 Fixtures simulate rendered X pages and a granted site permission in an isolated temporary extension. They do not establish live X compatibility, real provider acceptance, or permission to automate. Do not test against a live account without the required X authorization and account owner's instruction.
 

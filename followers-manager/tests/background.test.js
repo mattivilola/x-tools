@@ -22,6 +22,7 @@ function makeChromeMock() {
     tabsRemoved: makeEvent(),
     tabsActivated: makeEvent(),
     windowsFocusChanged: makeEvent(),
+    storageChanged: makeEvent(),
   };
   const state = {
     permissionsAllowed: true,
@@ -34,6 +35,7 @@ function makeChromeMock() {
     scheduled: [],
     injected: [],
     sentMessages: [],
+    writes: 0,
   };
   state.storage.fmData = { keepList: [] };
 
@@ -45,13 +47,20 @@ function makeChromeMock() {
     },
     action: { onClicked: events.actionClicked },
     storage: {
+      onChanged: events.storageChanged,
       local: {
         async get(key) {
           if (Array.isArray(key)) return Object.fromEntries(key.map((name) => [name, clone(state.storage[name])]));
           return { [key]: clone(state.storage[key]) };
         },
         async set(values) {
-          for (const [key, value] of Object.entries(values)) state.storage[key] = clone(value);
+          state.writes++;
+          const changes = {};
+          for (const [key, value] of Object.entries(values)) {
+            changes[key] = { oldValue: clone(state.storage[key]), newValue: clone(value) };
+            state.storage[key] = clone(value);
+          }
+          await events.storageChanged.emit(changes, 'local');
         },
       },
     },
@@ -233,7 +242,7 @@ test('background service enforces supervised session ownership and terminal-stat
     state.windows.get(1).focused = true;
 
     // Explicit background mode skips only the focus requirement, never route/ownership checks.
-    state.storage.fmSession.pauseOnFocusLoss = false;
+    await chrome.storage.local.set({ fmSession: { ...state.storage.fmSession, pauseOnFocusLoss: false, updatedAt: new Date(Date.now() + 1).toISOString() } });
     state.windows.get(1).focused = false;
     response = await send({ type: 'fm:guard', id: sessionId }, ownedSender);
     assert.equal(response.ok, true);
@@ -246,13 +255,13 @@ test('background service enforces supervised session ownership and terminal-stat
     assert.equal(response.ok, false, 'Resume still requires the focused monitor');
     state.windows.get(1).focused = true;
     await send({ type: 'fm:resume', id: sessionId }, ownedSender);
-    state.storage.fmSession.pauseOnFocusLoss = true;
+    await chrome.storage.local.set({ fmSession: { ...state.storage.fmSession, pauseOnFocusLoss: true, updatedAt: new Date(Date.now() + 1).toISOString() } });
 
-    state.storage.fmData.keepList = [{ id: 'member-1', username: 'alice' }];
+    await chrome.storage.local.set({ fmData: { keepList: [{ id: 'member-1', username: 'alice' }] } });
     response = await send({ type: 'fm:guard', id: sessionId }, ownedSender);
     assert.equal(response.ok, false);
     assert.match(response.error, /now on your keep list/);
-    state.storage.fmData.keepList = [];
+    await chrome.storage.local.set({ fmData: { keepList: [] } });
 
     response = await send({ type: 'fm:stop', id: sessionId, message: 'Stopped by user.' }, ownedSender);
     assert.equal(response.ok, true);
@@ -293,6 +302,32 @@ test('background service enforces supervised session ownership and terminal-stat
     assert.equal(response.session.mode, 'follow');
     assert.equal(state.tabs.get(response.session.tabId).url, 'https://x.com/fixture/followers');
     assert.equal(response.session.queue[0].requireVerified, true);
+    await send({ type: 'fm:stop', id: response.session.id }, appSender);
+
+    response = await send({ ...baseStart, mode: 'scan', queue: [] }, appSender);
+    const scanId = response.session.id, scanSender = { ...ownedSender, tab: { id: response.session.tabId } };
+    await send({ type: 'fm:resume', id: scanId }, scanSender);
+    const baseline = state.writes, originalNow = Date.now;
+    try {
+      const clock = originalNow(); Date.now = () => clock;
+      response = await send({ type: 'fm:update', id: scanId, recordChanges: [{ username: 'alice', bio: 'first' }] }, scanSender);
+      assert.equal(state.writes, baseline, 'scan deltas buffer between checkpoints');
+      assert.equal(response.session.recordCount, 1); assert.equal(response.session.records, undefined); assert.equal(response.session.queue, undefined);
+      Date.now = () => clock + 5001;
+      await send({ type: 'fm:update', id: scanId, recordChanges: [{ username: 'alice', bio: 'new' }, { username: 'bruno' }] }, scanSender);
+      assert.equal(state.writes, baseline + 1, 'periodic checkpoint persists merged deltas');
+      assert.equal(state.storage.fmSession.records.length, 2); assert.equal(state.storage.fmSession.records[0].bio, 'new');
+      await send({ type: 'fm:update', id: scanId, recordChanges: [{ username: 'carl' }] }, scanSender);
+      assert.equal(state.storage.fmSession.records.length, 2);
+      await send({ type: 'fm:pause', id: scanId }, appSender);
+      assert.equal(state.storage.fmSession.records.length, 3, 'Pause flushes buffered records');
+      await send({ type: 'fm:resume', id: scanId }, scanSender);
+      await send({ type: 'fm:update', id: scanId, recordChanges: [{ username: 'dora' }] }, scanSender);
+      await send({ type: 'fm:stop', id: scanId }, appSender);
+      assert.equal(state.storage.fmSession.records.length, 4, 'Stop flushes buffered records');
+      await send({ type: 'fm:update', id: scanId, recordChanges: [{ username: 'late' }] }, scanSender);
+      assert.equal(state.storage.fmSession.records.length, 4, 'late deltas cannot alter a stopped scan');
+    } finally { Date.now = originalNow; }
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     if (previousChrome) Object.defineProperty(globalThis, 'chrome', previousChrome);

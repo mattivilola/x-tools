@@ -3,3 +3,5 @@
 @media(max-width:850px){.overview{grid-template-columns:1fr}.intro{align-items:flex-start}h1{font-size:31px}.account-bar{align-items:end}.account-bar>button{flex:1}.import-menu{margin-left:0}.import-panel{right:auto;left:0}.session-strip{align-items:flex-start;flex-direction:column}.cleanup-bar{align-items:flex-start;flex-direction:column}.masthead>span{display:none}.trend-number{flex-wrap:wrap;gap:8px 16px}.section-head{flex-wrap:wrap}main{padding:24px 14px}.panel{padding:18px}.filters button{flex:1}.intro button{font-size:12px;padding:8px}.account-bar label{width:100%}.account-bar input{width:100%}footer{flex-direction:column}h1{letter-spacing:-.8px}}
 .bulk-actions{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}.bulk-actions button{flex:1;min-width:210px}.bio{display:block;color:#50667a;font-size:12px;max-width:300px;margin-top:5px}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+
+.pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;font-size:13px;flex-wrap:wrap}.pagination button{padding:8px 14px}

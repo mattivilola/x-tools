@@ -1,6 +1,6 @@
 # Followers Manager privacy
 
-Version 0.2.0 · 2026-11-03
+Version 0.3.0 · 2026-11-03
 
 Follower/following snapshots, profile observations, keep-list entries, and the latest session state/outcomes are saved in `chrome.storage.local` on this device. This is browser extension storage, not an encrypted vault. There is no developer backend, analytics, cloud sync, remote font or remote image loading.
 
@@ -11,3 +11,5 @@ Live scans read rendered user cards, including observed bio availability, verifi
 JSON/CSV exports go to your browser's download location and may contain personal account information. Backups include snapshots and keep lists; the latest session state/log stays separately in local extension storage and is replaced on the next session. Do not commit personal exports or share them accidentally. Backup restores merge with existing history. Imported archive wrappers are parsed, not run.
 
 Use Clear local history to remove local history/keep entries and session state after stopping live work. This asks for confirmation, does not modify X, and cannot delete exported files. Uninstalling the extension normally removes its local extension storage. Clear browser data and device backups according to your own retention needs. Only collect/store data you are authorized to use.
+
+Running scan observations are buffered locally between approximately five-second durable checkpoints, with immediate checkpoints on Pause, Stop and completion. An abrupt shutdown may lose the buffered observations; no data is sent to a server. First-five batches use the same reviewed local records and permissions as full selections.

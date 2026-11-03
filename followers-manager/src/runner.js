@@ -13,7 +13,7 @@
   async function message(type, extra = {}) {
     const result = await chrome.runtime.sendMessage({ type: `fm:${type}`, id: session.id, ...extra });
     if (!result?.ok) throw new Error(result?.error || 'The extension connection was lost. Stop and reopen the dashboard.');
-    session = result.session;
+    session = { ...session, ...result.session };
     if (localControl && !terminal.has(session.status)) session = { ...session, status: localControl };
     render(); return session;
   }
@@ -33,7 +33,7 @@
     main.append(el('div', '', 'badge'), el('h2', 'Stay in control.'), el('p', session.pauseOnFocusLoss === false ? 'Focus pausing is OFF. This session may continue when hidden. Monitor progress and return to use Pause or Stop.' : 'Focus pausing is ON. Keep this tab visible and focused. Use Pause or Stop whenever needed.'));
     const current = el('div', null, 'current'); current.append(el('span', 'Current account', 'muted'), el('strong'), el('span', '', 'reason')); main.append(current);
     const progress = el('progress'); progress.max = Math.max(session.queue.length, 1); progress.value = 0; progress.setAttribute('aria-label', 'Session progress');
-    main.append(progress, el('p', '', 'progress-text'), el('p', '', 'timer'));
+    main.append(progress, el('p', '', 'progress-text'), el('p', '', 'estimate muted'), el('p', '', 'timer'));
     const status = el('p', '', 'status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); main.append(status);
     main.append(el('p', ['cleanup','follow'].includes(session.mode) ? 'You are responsible for these account actions. Monitoring and consent do not change X’s rules. X restricts website scripting and automated following/unfollowing; restrictions or suspension remain possible.' : 'This session reads rendered pages. Lists can be partial; activity evidence can be unavailable. No follow/unfollow actions occur in this mode.', 'risk'));
     main.append(el('p', 'Stop blocks further clicks. A request already submitted may still finish. Unfollows have no guaranteed undo.', 'muted'));
@@ -56,6 +56,8 @@
     shadow.querySelector('.reason').textContent = current?.reasons?.join(' · ') || (session.mode === 'scan' ? 'Collecting observed cards only; coverage needs your review.' : 'Your reviewed selection');
     shadow.querySelector('progress').value = session.mode === 'scan' ? 0 : session.index;
     shadow.querySelector('.progress-text').textContent = session.mode === 'scan' ? `${Math.max(seen.size, session.records.length)} accounts collected` : `${session.index} of ${session.queue.length} processed · ${session.results.filter((r) => r.outcome === 'confirmed').length} confirmed ${session.mode === 'follow' ? 'follows' : 'unfollows'}`;
+    const remaining = Math.max(0, session.queue.length - session.index), seconds = Math.ceil(remaining * session.delayMs / 1000);
+    shadow.querySelector('.estimate').textContent = ['follow', 'cleanup'].includes(session.mode) ? `${session.batchSize === '5' ? 'First 5 test batch · ' : ''}Remaining countdown time: ${Math.floor(seconds / 60)}m ${seconds % 60}s, plus lookup and confirmation. Pauses and browser throttling add time.` : '';
     shadow.querySelector('.status').textContent = session.message;
     shadow.querySelector('.timer').textContent = countdown || (pending ? 'An action was submitted; awaiting confirmation.' : '');
     const resume = shadow.querySelector('#fm-resume'); resume.textContent = session.status === 'ready' ? (session.mode === 'follow' ? 'Begin supervised follow back' : session.mode === 'cleanup' ? 'Begin supervised unfollow' : 'Begin reading') : 'Resume';
@@ -99,7 +101,17 @@
     if (!pending && ownedDialog()) ownedDialog().querySelector('[data-testid="confirmationSheetCancel"]')?.click();
     try { await message('stop', { message: session.message }); } catch { /* Remain stopped locally. */ }
   }
-  function cells() { return [...document.querySelectorAll('[data-testid="UserCell"]')].filter((c) => !host.contains(c)); }
+  let cardsDirty = true, cardList = [], cardIndex = new Map();
+  // The overlay's shadow tree is outside this observer, so timer renders do not
+  // invalidate the rendered-page index. Never retain a disconnected target.
+  new MutationObserver(() => { cardsDirty = true; }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+  function cells() {
+    if (cardsDirty) {
+      cardList = [...document.querySelectorAll('[data-testid="UserCell"]')].filter((c) => !host?.contains(c));
+      cardIndex = new Map(cardList.map((c) => [usernameOf(c), c])); cardsDirty = false;
+    }
+    return cardList;
+  }
   function usernameOf(cell) {
     return readers.usernameOf(cell);
   }
@@ -126,10 +138,10 @@
     const discovered = new Set();
     for (let pass = 0; pass < 180 && idle < 6; pass++) {
       await guard();
-      for (const cell of cells()) {
-        const name = usernameOf(cell); if (name) discovered.add(name);
-        if (name === target.username) return cell;
-      }
+      cells();
+      const match = cardIndex.get(target.username);
+      if (match?.isConnected) return match;
+      for (const name of cardIndex.keys()) if (name) discovered.add(name);
       idle = discovered.size === last ? idle + 1 : 0; last = discovered.size;
       countdown = `Finding @${target.username} in your ${session.mode === 'follow' ? 'followers' : 'following'} list…`; render(); scrollBy(0, 640); await wait(800);
       if (idle >= 6 && !wrapped) { scrollTo(0, 0); idle = 0; last = -1; discovered.clear(); wrapped = true; }
@@ -211,9 +223,15 @@
     let idle = 0, last = -1;
     for (let pass = 0; pass < 500; pass++) {
       await guard();
-      for (const cell of cells()) { const row = recordOf(cell); if (row && seen.size < 10000) seen.set(row.username, row); }
+      const changes = [];
+      for (const cell of cells()) {
+        const row = recordOf(cell); if (!row || (!seen.has(row.username) && seen.size >= 10000)) continue;
+        const { observedAt, ...fields } = row, previous = seen.get(row.username);
+        const { observedAt: previousTime, ...oldFields } = previous || {};
+        if (JSON.stringify(fields) !== JSON.stringify(oldFields)) { seen.set(row.username, row); changes.push(row); }
+      }
       idle = seen.size === last ? idle + 1 : 0; last = seen.size;
-      await message('update', { records: [...seen.values()], message: `${seen.size} observed accounts. Save as partial unless you independently verify full coverage.` });
+      await message('update', { recordChanges: changes, message: `${seen.size} observed accounts. Save as partial unless you independently verify full coverage.` });
       if (idle >= 8 || seen.size >= 10000) { await message('update', { status: 'complete', message: seen.size >= 10000 ? 'Collection cap reached. This list is partial.' : 'No more cards observed. This does not prove full-list coverage. Return to the dashboard to save.' }); return; }
       scrollBy(0, 640); await wait(1000);
     }

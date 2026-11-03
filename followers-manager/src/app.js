@@ -1,9 +1,12 @@
 import { normalizeHandle, normalizeSnapshot, parseImport, compareSnapshots, buildReview, buildActionQueue, exportCsv, DEMO_SNAPSHOTS } from './core.js';
 import { MAX_QUEUE, isKept } from './session.js';
+import { PAGE_SIZE, actionBatch, minimumDuration } from './performance.js';
 const $ = (id) => document.getElementById(id);
 const cleanData = () => ({ version: 1, snapshots: [], keepList: [] });
 const actionIds = ['follow-verified', 'follow-all', 'unfollow-nonfollowers', 'unfollow-all'];
 let data = cleanData(), session = null, rows = [], selected = new Set(), demo = false, currentAccount = '', prepared = null;
+let page = 0, logSession = '', logCount = 0;
+const rowNodes = new Map();
 const text = (tag, value, cls) => { const node = document.createElement(tag); node.textContent = value; if (cls) node.className = cls; return node; };
 const date = (value) => new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 const announce = (value, error = false) => { $('notice').textContent = value; $('notice').classList.toggle('error', error); };
@@ -65,9 +68,14 @@ function visibleRows() {
     return matches && `${row.username} ${row.name}`.toLowerCase().includes(query);
   });
 }
+function pageRows() { return visibleRows().slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE); }
 function renderRows() {
-  const body = $('people'); body.replaceChildren();
-  for (const row of visibleRows()) {
+  const body = $('people'), filtered = visibleRows();
+  page = Math.min(page, Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1));
+  const nodes = [];
+  for (const row of pageRows()) {
+    const signature = JSON.stringify([row, isKept(row, data.keepList)]), cached = rowNodes.get(row.username);
+    if (cached?.signature === signature) { cached.node.querySelector('input').checked = selected.has(row.username); nodes.push(cached.node); continue; }
     const tr = document.createElement('tr');
     const selectCell = document.createElement('td'), checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selected.has(row.username); checkbox.disabled = !row.canSelect || isKept(row, data.keepList); checkbox.setAttribute('aria-label', `Select @${row.username}`);
     if (checkbox.disabled) { selected.delete(row.username); checkbox.checked = false; }
@@ -77,9 +85,15 @@ function renderRows() {
     const evidence = document.createElement('td'); evidence.append(...(row.reasons.length ? row.reasons : ['No cleanup suggestion.']).map((reason) => text('span', reason, 'reason')));
     const keepCell = document.createElement('td'), keep = text('button', isKept(row, data.keepList) ? 'Kept' : 'Keep', 'secondary keep-button'); keep.setAttribute('aria-label', `${isKept(row, data.keepList) ? 'Unprotect' : 'Protect'} @${row.username}`); keep.setAttribute('aria-pressed', String(isKept(row, data.keepList)));
     keep.addEventListener('click', attempt(async () => { if (isKept(row, data.keepList)) data.keepList = data.keepList.filter((item) => !isKept(row, [item])); else data.keepList.push({ id: row.id, username: row.username }); selected.delete(row.username); await persist(); render(); })); keepCell.append(keep);
-    tr.append(selectCell, accountCell, evidence, keepCell); body.append(tr);
+    tr.append(selectCell, accountCell, evidence, keepCell); nodes.push(tr);
+    rowNodes.set(row.username, { signature, node: tr });
   }
+  // Retain only the current page: filters never leave thousands of detached rows.
+  for (const [username, entry] of rowNodes) if (!nodes.includes(entry.node)) rowNodes.delete(username);
+  body.replaceChildren(...nodes);
   if (!body.children.length) { const tr = document.createElement('tr'), td = text('td', rows.length ? 'No accounts match this view.' : 'Import a following snapshot or try the synthetic demo.', 'empty'); td.colSpan = 4; tr.append(td); body.append(tr); }
+  $('page-summary').textContent = filtered.length ? `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, filtered.length)} of ${filtered.length} accounts · ${PAGE_SIZE} per page` : '0 accounts';
+  $('previous-page').disabled = page === 0; $('next-page').disabled = (page + 1) * PAGE_SIZE >= filtered.length;
   renderSelection();
 }
 function renderSelection() {
@@ -113,7 +127,9 @@ function renderSession() {
   $('session-info').textContent = `${session.mode === 'scan' ? `${session.records.length} observed accounts` : `${session.index}/${session.queue.length} processed`} — ${session.message}`;
   $('pause-session').disabled = session.status !== 'running'; $('stop-session').disabled = ['complete', 'stopped', 'error'].includes(session.status);
   $('save-scan').hidden = session.mode !== 'scan' || !session.records.length || session.status === 'running';
-  $('session-log').replaceChildren(...session.results.map((r) => text('p', `${date(r.at)} · @${r.username}: ${r.outcome} — ${r.detail}`)));
+  if (logSession !== session.id || logCount > session.results.length) { $('session-log').replaceChildren(); logSession = session.id; logCount = 0; }
+  $('session-log').append(...session.results.slice(logCount).map((r) => text('p', `${date(r.at)} · @${r.username}: ${r.outcome} — ${r.detail}`)));
+  logCount = session.results.length;
 }
 function updateSessionButtons() {
   const busy = session && !['complete', 'stopped', 'error'].includes(session.status);
@@ -122,13 +138,18 @@ function updateSessionButtons() {
   for (const id of ['inspect', 'review-cleanup']) $(id).disabled = !!busy || demo || !selected.size || selected.size > MAX_QUEUE;
 }
 function download(name, content, type) { const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-function queue() { return rows.filter((r) => selected.has(r.username) && r.canSelect && !isKept(r, data.keepList)); }
+function queue() {
+  // Review sorting is for people; execution follows the observed list order so
+  // the runner can continue down the list rather than wrap for each suggestion.
+  const order = new Map((latest()?.following || []).map((r, index) => [r.username, index]));
+  return rows.filter((r) => selected.has(r.username) && r.canSelect && !isKept(r, data.keepList)).sort((a, b) => (order.get(a.username) ?? Infinity) - (order.get(b.username) ?? Infinity));
+}
 async function start(mode, direction, plan = prepared) {
   const own = account();
   if (currentAccount && currentAccount !== own) throw new Error('Switch the displayed account before starting a live session.');
   if (plan?.account && plan.account !== own) throw new Error('The account changed after you reviewed this selection. Review it again.');
   await command('start', { mode, account: own, direction, queue: mode === 'scan' ? [] : plan?.queue || queue(), action: plan?.action || null,
-    pauseOnFocusLoss: $('pause-focus').checked, consent: ['cleanup', 'follow'].includes(mode), authorization: 'written-permission' });
+    batchSize: plan?.batchSize || 'all', pauseOnFocusLoss: $('pause-focus').checked, consent: ['cleanup', 'follow'].includes(mode), authorization: 'written-permission' });
 }
 function prepareStart(mode, direction, action = null) {
   if (session && !['complete', 'stopped', 'error'].includes(session.status)) throw new Error('Finish or Stop the current session before preparing another one.');
@@ -140,16 +161,26 @@ function prepareStart(mode, direction, action = null) {
     const result = buildActionQueue(latest(), action, data.keepList); selection = result.queue; warning = `${result.excluded} excluded. ${result.warning}`;
   }
   if (mode !== 'scan' && !selection.length) throw new Error(`No eligible accounts for this action. ${warning}`);
-  prepared = { mode, direction, action, account: own, queue: structuredClone(selection) };
+  prepared = { mode, direction, action, account: own, all: structuredClone(selection), queue: [], batchSize: 'all' };
+  $('batch-size').value = 'all'; $('batch-options').hidden = !['cleanup', 'follow'].includes(mode);
   $('accept').checked = false; $('authorization').checked = false;
   $('pause-focus').checked = true; updateFocusNote();
   $('consent-title').textContent = mode === 'follow' ? 'Review follow-back selection' : mode === 'cleanup' ? 'Review unfollow selection' : mode === 'scan' ? 'Supervise this scan' : 'Supervise profile inspection';
-  $('consent-description').textContent = ['cleanup','follow'].includes(mode) ? `The extension will ${mode === 'follow' ? 'follow back' : 'unfollow'} ${selection.length} selected accounts, one at a time. Review this fixed selection and monitor its progress.` : 'The extension will read rendered X pages. This session will not follow or unfollow anyone.';
   $('consent-coverage').textContent = warning;
-  $('consent-list').replaceChildren(...selection.slice(0, 500).map((r) => text('li', `@${r.username} — ${r.reasons?.join('; ') || 'Selected by you'}`)));
-  if (selection.length > 500) $('consent-list').append(text('li', `${selection.length - 500} more accounts in this fixed selection. Export review data or narrow your selection to inspect individuals.`));
+  renderPrepared();
   $('consent').showModal();
 }
+function renderPrepared() {
+  if (!prepared) return;
+  const { mode } = prepared;
+  prepared.batchSize = $('batch-size').value;
+  const selection = prepared.queue = actionBatch(prepared.all, prepared.batchSize);
+  $('consent-description').textContent = ['cleanup','follow'].includes(mode) ? `The extension will ${mode === 'follow' ? 'follow back' : 'unfollow'} ${selection.length} selected accounts, one at a time.${prepared.batchSize === '5' ? ' First 5 test: this session stops after this batch. This performs real account actions.' : ''} Review this fixed selection and monitor its progress.` : 'The extension will read rendered X pages. This session will not follow or unfollow anyone.';
+  $('duration-estimate').textContent = ['cleanup','follow'].includes(mode) ? `Minimum countdown time: ${minimumDuration(selection.length)}. Finding accounts, confirming results, pauses and background throttling add time.` : '';
+  $('consent-list').replaceChildren(...selection.slice(0, 500).map((r) => text('li', `@${r.username} — ${r.reasons?.join('; ') || 'Selected by you'}`)));
+  if (selection.length > 500) $('consent-list').append(text('li', `${selection.length - 500} more accounts in this fixed selection. Export review data or narrow your selection to inspect individuals.`));
+}
+$('batch-size').addEventListener('change', () => { $('accept').checked = false; renderPrepared(); });
 function updateFocusNote() { $('focus-note').textContent = $('pause-focus').checked ? 'Switching tabs or windows pauses this session. Return to the monitor and press Resume to continue.' : 'This session can continue in a background tab. Keep monitoring its progress and return to use Pause or Stop. Browsers may slow down background work; this is not a guarantee of continuous execution.'; }
 $('pause-focus').addEventListener('change', updateFocusNote);
 $('export-action').addEventListener('click', attempt(() => { if (prepared?.queue) download('action-selection.csv', exportCsv(prepared.queue), 'text/csv'); }));
@@ -168,8 +199,9 @@ $('scan-followers').addEventListener('click', attempt(() => prepareStart('scan',
 $('scan-following').addEventListener('click', attempt(() => prepareStart('scan', 'following')));
 $('inspect').addEventListener('click', attempt(() => prepareStart('inspect')));
 $('window').addEventListener('change', () => renderChart(snapshots()));
-for (const id of ['filter', 'search']) $(id).addEventListener('input', renderRows);
-$('select-visible').addEventListener('click', () => { for (const row of visibleRows()) if (row.canSelect && !isKept(row, data.keepList) && selected.size < MAX_QUEUE) selected.add(row.username); renderRows(); announce(`Selected up to ${MAX_QUEUE} visible accounts. Review them before starting.`); });
+for (const id of ['filter', 'search']) $(id).addEventListener('input', () => { page = 0; renderRows(); });
+for (const [id, change] of [['previous-page', -1], ['next-page', 1]]) $(id).addEventListener('click', () => { page = Math.max(0, page + change); renderRows(); $('people').closest('.table-wrap').scrollTop = 0; });
+$('select-visible').addEventListener('click', () => { for (const row of pageRows()) if (row.canSelect && !isKept(row, data.keepList) && selected.size < MAX_QUEUE) selected.add(row.username); renderRows(); announce('Selected eligible accounts on this page. Selections on other pages are preserved.'); });
 $('clear-selection').addEventListener('click', () => { selected.clear(); renderRows(); });
 $('review-cleanup').addEventListener('click', attempt(() => prepareStart('cleanup')));
 $('start-cleanup').addEventListener('click', attempt(async () => {

@@ -191,6 +191,52 @@ function fixture(path) {
     assert.equal(allResult.results[0].outcome, 'skipped'); assert.equal(allResult.results[1].username, 'bruno'); assert.equal(allResult.results[1].outcome, 'confirmed');
     assert.equal(await all.evaluate(() => window.fixtureFollows), 1); assert.equal(await all.evaluate(() => window.fixtureClicks), 0);
     check('all-follower follow back includes unverified followers and skips accounts already followed at execution time');
+
+    await app.bringToFront();
+    const batchFollowers = Array.from({ length: 7 }, (_, i) => ({ username: `batch${i + 1}`, id: String(201 + i), verified: true, bio: 'Synthetic batch profile' }));
+    const largeData = { account: 'fixture', observedAt: new Date().toISOString(), source: 'synthetic-fixture', coverage: 'complete',
+      followers: batchFollowers, following: Array.from({ length: 123 }, (_, i) => ({ username: `entry${String(i).padStart(3, '0')}`, bio: 'Synthetic pagination profile' })) };
+    await app.locator('.import-menu summary').click();
+    await app.locator('#import').setInputFiles({ name: 'pagination.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(largeData)) });
+    await app.waitForFunction(() => document.getElementById('import').value === ''); await app.locator('.import-menu summary').click();
+    assert.equal(await app.locator('#people tr').count(), 50);
+    assert.match(await app.locator('#page-summary').textContent(), /1–50 of 123/);
+    await app.locator('#select-visible').click(); assert.equal(await app.locator('#selection-count').textContent(), '50 selected');
+    const firstNodeRetained = await app.evaluate(() => { window.fixtureFirstRow = document.querySelector('#people tr'); return true; });
+    assert.equal(firstNodeRetained, true);
+    await app.locator('#clear-selection').click();
+    assert.equal(await app.evaluate(() => window.fixtureFirstRow === document.querySelector('#people tr')), true, 'selection changes reuse the rendered row nodes');
+    await app.locator('#select-visible').click(); await app.locator('#next-page').click(); await app.locator('#select-visible').click();
+    assert.equal(await app.locator('#selection-count').textContent(), '100 selected');
+    await app.locator('#next-page').click(); assert.equal(await app.locator('#people tr').count(), 23); assert.equal(await app.locator('#next-page').isDisabled(), true);
+    await app.locator('#search').fill('entry122'); assert.equal(await app.locator('#people tr').count(), 1);
+    assert.equal(await app.locator('#selection-count').textContent(), '100 selected');
+    await app.locator('#search').fill(''); assert.match(await app.locator('#page-summary').textContent(), /1–50 of 123/);
+    await app.locator('#clear-selection').click();
+    check('50-row pagination, filtering, cross-page selection and row reuse work with 123 accounts');
+
+    for (const action of ['follow-verified', 'follow-all', 'unfollow-all']) {
+      await app.locator(`#${action}`).click(); await app.locator('#batch-size').selectOption('5');
+      assert.match(await app.locator('#consent-description').textContent(), /5 selected accounts/);
+      assert.equal(await app.locator('#consent-list li').count(), 5);
+      assert.match(await app.locator('#duration-estimate').textContent(), /40s/);
+      await app.getByRole('button', { name: 'Cancel', exact: true }).click();
+    }
+    // Seven eligible synthetic followers, but only the reviewed first five may act.
+    await context.route('https://x.com/**', (route) => route.fulfill({ contentType: 'text/html', body: `<!doctype html><title>Batch fixture</title><a data-testid="AppTabBar_Profile_Link" href="/fixture">Your profile</a>${batchFollowers.map((r) => `<div data-testid="UserCell" style="height:140px"><a href="/${r.username}">${r.username}<svg aria-label="Verified account"></svg></a><button data-testid="${r.id}-follow" onclick="window.fixtureFollows++;this.dataset.testid='${r.id}-unfollow';this.textContent='Following'">Follow back</button></div>`).join('')}<script>window.fixtureFollows=0;</script>` }));
+    await app.locator('#follow-verified').click();
+    assert.equal(await app.locator('#batch-size').inputValue(), 'all', 'each new review resets the batch choice');
+    await app.locator('#batch-size').selectOption('5'); await app.locator('#authorization').check(); await app.locator('#accept').check();
+    const batchPromise = context.waitForEvent('page'); await app.locator('#start-cleanup').click(); const batch = await batchPromise;
+    batch.on('pageerror', (error) => errors.push(error.message));
+    await batch.goto('https://x.com/fixture/followers'); await batch.bringToFront(); await batch.locator('#fm-resume').click();
+    await batch.locator('.status').filter({ hasText: 'Follow-back selection processed' }).waitFor({ timeout: 65000 });
+    const batchResult = await worker.evaluate(async () => (await chrome.storage.local.get('fmSession')).fmSession);
+    assert.equal(batchResult.queue.length, 5); assert.equal(batchResult.index, 5); assert.equal(batchResult.results.length, 5);
+    assert.equal(await batch.evaluate(() => window.fixtureFollows), 5);
+    assert.equal(await batch.locator('[data-testid="206-follow"]').count(), 1); assert.equal(await batch.locator('[data-testid="207-follow"]').count(), 1);
+    await batch.waitForTimeout(9000); assert.equal(await batch.evaluate(() => window.fixtureFollows), 5);
+    check('first-five verified follow batch confirms five real fixture actions, completes and never follows the remaining two');
     assert.deepEqual(errors, []); check('no page errors occur');
     console.log(`Screenshots: ${output}`);
   } finally { if (context) await context.close(); rmSync(temporary, { recursive: true, force: true }); }

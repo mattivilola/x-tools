@@ -1,9 +1,36 @@
 import { makeSession, isKept, sessionPath, assertSessionUrl, TERMINAL } from './session.js';
+import { mergeRecords, checkpointDue } from './performance.js';
 const APP = chrome.runtime.getURL('app.html');
 let chain = Promise.resolve();
 const serial = (task) => { const result = chain.then(task); chain = result.catch(() => {}); return result; };
-const read = async () => (await chrome.storage.local.get('fmSession')).fmSession;
-const write = async (s) => { s.updatedAt = new Date().toISOString(); await chrome.storage.local.set({ fmSession: s }); return s; };
+let cachedSession, lastCheckpoint = 0, kept;
+const read = async () => cachedSession ??= (await chrome.storage.local.get('fmSession')).fmSession;
+const readKeepList = async () => kept ??= (await chrome.storage.local.get('fmData')).fmData?.keepList || [];
+const write = async (s, checkpoint = true) => {
+  s.updatedAt = new Date().toISOString();
+  if (checkpoint) {
+    await chrome.storage.local.set({ fmSession: s });
+    lastCheckpoint = Date.now();
+  }
+  cachedSession = s;
+  return s;
+};
+// Progress/guard replies to the monitor omit immutable queues and the growing scan.
+// Boot and durable storage checkpoints still contain the complete resumable session.
+const reply = (s, sender) => {
+  if (!sender.tab || sender.tab.id !== s.tabId) return s;
+  const { records, queue, ...progress } = s;
+  return { ...progress, recordCount: records.length };
+};
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.fmData) kept = changes.fmData.newValue?.keepList || [];
+  if (changes.fmSession) {
+    const next = changes.fmSession.newValue;
+    // Our older checkpoint event must not overwrite newer buffered scan progress.
+    if (!next || next.id !== cachedSession?.id || Date.parse(next.updatedAt) > Date.parse(cachedSession.updatedAt)) cachedSession = next;
+  }
+});
 const isApp = (sender) => sender.id === chrome.runtime.id && sender.url === APP;
 async function focused(s) {
   const tab = await chrome.tabs.get(s.tabId);
@@ -34,8 +61,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       if (old && !TERMINAL.has(old.status)) throw new Error('Stop the existing session first.');
       const s = makeSession(request);
       if (!await chrome.permissions.contains({ origins: ['https://x.com/*'] })) throw new Error('X site permission has not been granted.');
-      const data = (await chrome.storage.local.get('fmData')).fmData;
-      if (['cleanup','follow'].includes(s.mode) && s.queue.some((row) => isKept(row, data?.keepList))) throw new Error('A selected account is now on your keep list.');
+      const keepList = await readKeepList();
+      if (['cleanup','follow'].includes(s.mode) && s.queue.some((row) => isKept(row, keepList))) throw new Error('A selected account is now on your keep list.');
       const tab = await chrome.tabs.create({ url: `https://x.com${sessionPath(s)}`, active: true });
       s.tabId = tab.id; await write(s);
       // The update listener also covers pages that finish loading later.
@@ -63,9 +90,9 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       if (!fromTab || s.status !== 'running') throw new Error('Session paused or no longer visible.');
       const isFocused = await focused(s); // Always verifies the owned tab and route, even in background mode.
       if (s.pauseOnFocusLoss !== false && !isFocused) throw new Error('Session paused or no longer visible.');
-      const data = (await chrome.storage.local.get('fmData')).fmData;
+      const keepList = await readKeepList();
       const target = s.queue[s.index];
-      if (['cleanup','follow'].includes(s.mode) && target && isKept(target, data?.keepList)) throw new Error('This account is now on your keep list.');
+      if (['cleanup','follow'].includes(s.mode) && target && isKept(target, keepList)) throw new Error('This account is now on your keep list.');
       return s;
     }
     if (request.type === 'fm:update') {
@@ -73,7 +100,7 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       const patch = {};
       if (typeof request.message === 'string') patch.message = request.message.slice(0, 300);
       if (request.current !== undefined) patch.current = s.queue[s.index] || null;
-      if (request.records && s.mode === 'scan') patch.records = request.records.slice(0, 10000);
+      if (request.recordChanges?.length && Array.isArray(request.recordChanges) && s.mode === 'scan') patch.records = mergeRecords(s.records, request.recordChanges.slice(0, 10000));
       if (!TERMINAL.has(s.status) && request.status && ['complete', 'error', 'paused'].includes(request.status)) patch.status = request.status;
       if (request.result && s.mode !== 'scan') {
         if (request.index !== s.index) throw new Error('Stale progress update.');
@@ -81,7 +108,8 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
         if (s.mode === 'inspect') result.profile = request.result.profile;
         patch.results = [...s.results, result]; patch.index = s.index + 1; patch.current = null;
       }
-      return write({ ...s, ...patch });
+      const next = { ...s, ...patch };
+      return write(next, s.mode !== 'scan' || checkpointDue(lastCheckpoint, Date.now(), next.status));
     }
     if (request.type === 'fm:next-profile') {
       if (!fromTab || s.mode !== 'inspect' || s.status !== 'running') throw new Error('Inspection is paused.');
@@ -90,7 +118,7 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
       await chrome.tabs.update(s.tabId, { url: `https://x.com${sessionPath(s)}` }); return next;
     }
     throw new Error('Unknown session command.');
-  }).then((session) => respond({ ok: true, session }), (error) => respond({ ok: false, error: error.message }));
+  }).then((session) => respond({ ok: true, session: reply(session, sender) }), (error) => respond({ ok: false, error: error.message }));
   return true;
 });
 chrome.tabs.onUpdated.addListener((tabId, change) => { if (change.status === 'complete') void inject(tabId); });
